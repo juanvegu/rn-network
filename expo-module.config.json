@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["RNNetworkModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.rnnetwork.RNNetworkModule"]
+  }
+}
