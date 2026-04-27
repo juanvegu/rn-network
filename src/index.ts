@@ -9,6 +9,7 @@ export type {
   MockNetworkProviderConfig,
 } from './types'
 export { RNNetworkBridge }
+export { MockNetworkProvider } from './MockNetworkProvider'
 
 export function setProvider(provider: NetworkProvider): void {
   registry.jsProvider = provider
