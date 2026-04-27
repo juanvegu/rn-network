@@ -13,10 +13,14 @@ export interface NetworkErrorPayload {
   httpStatus?: number
 }
 
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
 export interface NetworkProvider {
   request(
     url: string,
-    headers: Record<string, string>
+    method: HttpMethod,
+    headers: Record<string, string>,
+    body?: Record<string, unknown>
   ): Promise<Record<string, unknown>>
 }
 

@@ -2,7 +2,7 @@
 import './src/networkConfig'
 
 import { isAvailable, request } from '@scotia/rn-network'
-import type { NetworkErrorPayload } from '@scotia/rn-network'
+import type { HttpMethod, NetworkErrorPayload } from '@scotia/rn-network'
 import { useState } from 'react'
 import {
   ActivityIndicator,
@@ -23,10 +23,10 @@ type RequestState =
 export default function App() {
   const [result, setResult] = useState<RequestState>({ status: 'idle' })
 
-  async function doRequest(url: string) {
+  async function doRequest(url: string, method: HttpMethod = 'GET', body?: Record<string, unknown>) {
     setResult({ status: 'loading' })
     try {
-      const data = await request(url)
+      const data = await request(url, method, {}, body)
       setResult({ status: 'success', data })
     } catch (e) {
       setResult({ status: 'error', error: e as NetworkErrorPayload })
@@ -45,9 +45,10 @@ export default function App() {
         </Section>
 
         <Section title="Requests">
-          <Btn label="GET /api/users/me"      onPress={() => doRequest('/api/users/me')} />
-          <Btn label="GET /api/accounts/list" onPress={() => doRequest('/api/accounts/list')} />
-          <Btn label="GET /ruta/sin/match"    onPress={() => doRequest('/ruta/sin/match')} />
+          <Btn label="GET /api/users/me"        onPress={() => doRequest('/api/users/me')} />
+          <Btn label="GET /api/accounts/list"  onPress={() => doRequest('/api/accounts/list')} />
+          <Btn label="POST /api/users/me"      onPress={() => doRequest('/api/users/me', 'POST', { name: 'Test' })} />
+          <Btn label="GET /ruta/sin/match"     onPress={() => doRequest('/ruta/sin/match')} />
         </Section>
 
         <Section title="Resultado">

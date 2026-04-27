@@ -1,4 +1,4 @@
-import type { MockNetworkProviderConfig, NetworkErrorPayload, NetworkProvider } from './types'
+import type { HttpMethod, MockNetworkProviderConfig, NetworkErrorPayload, NetworkProvider } from './types'
 
 export class MockNetworkProvider implements NetworkProvider {
   private routes: Map<string, Record<string, unknown>>
@@ -9,7 +9,9 @@ export class MockNetworkProvider implements NetworkProvider {
 
   async request(
     url: string,
-    _headers: Record<string, string>
+    _method: HttpMethod,
+    _headers: Record<string, string>,
+    _body?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     let bestMatch: string | null = null
 

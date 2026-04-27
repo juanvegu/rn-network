@@ -1,11 +1,12 @@
 import { RNNetworkBridge } from './RNNetworkBridge'
 import { registry } from './RNNetworkRegistry'
-import type { NetworkErrorPayload, NetworkProvider } from './types'
+import type { HttpMethod, NetworkErrorPayload, NetworkProvider } from './types'
 
 export type {
   NetworkErrorCode,
   NetworkErrorPayload,
   NetworkProvider,
+  HttpMethod,
   MockNetworkProviderConfig,
 } from './types'
 export { RNNetworkBridge }
@@ -25,15 +26,17 @@ export function isAvailable(): boolean {
 
 export async function request(
   url: string,
-  headers: Record<string, string> = {}
+  method: HttpMethod = 'GET',
+  headers: Record<string, string> = {},
+  body?: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   if (RNNetworkBridge.isAvailable()) {
-    return RNNetworkBridge.request(url, headers)
+    return RNNetworkBridge.request(url, method, headers, body)
   }
 
   const mock = registry.jsProvider
   if (__DEV__ && mock) {
-    return mock.request(url, headers)
+    return mock.request(url, method, headers, body)
   }
 
   throw { code: 'PROVIDER_NOT_SET', retryable: false } satisfies NetworkErrorPayload

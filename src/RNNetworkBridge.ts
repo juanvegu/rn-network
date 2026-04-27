@@ -1,10 +1,13 @@
 import { requireNativeModule } from 'expo-modules-core'
-import type { NetworkErrorPayload } from './types'
+import type { HttpMethod, NetworkErrorPayload } from './types'
 
 interface NativeBridge {
+  hasNativeProvider(): boolean
   request(
     url: string,
-    headers: Record<string, string>
+    method: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown> | null
   ): Promise<Record<string, unknown>>
 }
 
@@ -20,33 +23,51 @@ function load(): NativeBridge | null {
   return _native
 }
 
+// Requires retryable: boolean to distinguish real payloads from Expo errors
+// (Expo exceptions only have .code, not .retryable).
 function isPayload(e: unknown): e is NetworkErrorPayload {
-  return typeof e === 'object' && e !== null && typeof (e as NetworkErrorPayload).code === 'string'
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    typeof (e as NetworkErrorPayload).code === 'string' &&
+    typeof (e as NetworkErrorPayload).retryable === 'boolean'
+  )
 }
 
 export const RNNetworkBridge = {
-  // The native module must be registered AND have request() implemented.
-  // The placeholder from Step 1 registers the module without request() → false.
-  // After Step 4 (request() implemented) → true.
+  // "available" = the module is linked AND the native side has a registered provider.
+  // placeholder (without hasNativeProvider): false → mock active in __DEV__
   isAvailable(): boolean {
     const mod = load()
-    return mod !== null && typeof mod.request === 'function'
+    if (!mod) return false
+    try {
+      return typeof mod.hasNativeProvider === 'function' && mod.hasNativeProvider()
+    } catch {
+      return false
+    }
   },
 
   async request(
     url: string,
-    headers: Record<string, string>
+    method: HttpMethod,
+    headers: Record<string, string>,
+    body?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const mod = load()
     if (!mod) {
       throw { code: 'PROVIDER_NOT_SET', retryable: false } satisfies NetworkErrorPayload
     }
     try {
-      return await mod.request(url, headers)
-    } catch (e) {
-      // Errors already formatted by NetworkErrorMapper (Step 4+) pass through directly.
-      // Any other unexpected error is mapped to UNKNOWN.
+      return await mod.request(url, method, headers, body ?? null)
+    } catch (e: any) {
       if (isPayload(e)) throw e
+
+      if (typeof e?.code === 'string') {
+        let parsed: unknown
+        try { parsed = JSON.parse(e.code) } catch { /* invalid JSON in code */ }
+        if (isPayload(parsed)) throw parsed
+      }
+
       throw { code: 'UNKNOWN', retryable: false } satisfies NetworkErrorPayload
     }
   },
