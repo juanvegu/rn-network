@@ -20,9 +20,17 @@ function load(): NativeBridge | null {
   return _native
 }
 
+function isPayload(e: unknown): e is NetworkErrorPayload {
+  return typeof e === 'object' && e !== null && typeof (e as NetworkErrorPayload).code === 'string'
+}
+
 export const RNNetworkBridge = {
+  // The native module must be registered AND have request() implemented.
+  // The placeholder from Step 1 registers the module without request() → false.
+  // After Step 4 (request() implemented) → true.
   isAvailable(): boolean {
-    return load() !== null
+    const mod = load()
+    return mod !== null && typeof mod.request === 'function'
   },
 
   async request(
@@ -33,6 +41,13 @@ export const RNNetworkBridge = {
     if (!mod) {
       throw { code: 'PROVIDER_NOT_SET', retryable: false } satisfies NetworkErrorPayload
     }
-    return mod.request(url, headers)
+    try {
+      return await mod.request(url, headers)
+    } catch (e) {
+      // Errors already formatted by NetworkErrorMapper (Step 4+) pass through directly.
+      // Any other unexpected error is mapped to UNKNOWN.
+      if (isPayload(e)) throw e
+      throw { code: 'UNKNOWN', retryable: false } satisfies NetworkErrorPayload
+    }
   },
 }

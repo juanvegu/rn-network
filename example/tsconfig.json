@@ -3,8 +3,8 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "rn-network": ["../src/index"],
-      "rn-network/*": ["../src/*"]
+      "@scotia/rn-network": ["../src/index"],
+      "@scotia/rn-network/*": ["../src/*"]
     }
   }
 }

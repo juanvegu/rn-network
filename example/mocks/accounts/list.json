@@ -1,0 +1,6 @@
+{
+  "accounts": [
+    { "id": "acc001", "type": "checking", "balance": 1500.00, "currency": "CLP" },
+    { "id": "acc002", "type": "savings",  "balance": 8200.50, "currency": "CLP" }
+  ]
+}
