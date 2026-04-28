@@ -1,9 +1,9 @@
 {
   "name": "@scotia/rn-network",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Networking bridge for Expo Brownfield in Scotiabank native apps",
-  "main": "build/src/index.js",
-  "types": "build/src/index.d.ts",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
   "scripts": {
     "build": "expo-module build && tsc -p plugin/tsconfig.json",
     "clean": "expo-module clean",
