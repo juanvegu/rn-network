@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
     :tvos => '15.1'
   }
   s.swift_version  = '5.9'
-  s.source         = { git: '' }
+  s.source           = { :git => 'https://github.com/juanvegu/rn-network-contracts.git', :branch => 'main' }
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'
