@@ -1,8 +1,8 @@
 package expo.modules.rnnetwork
 
-import com.scotia.rnnetwork.contracts.CancellableNetworkProvider
-import com.scotia.rnnetwork.contracts.NetworkProvider
-import com.scotia.rnnetwork.contracts.RNNetworkRegistry
+import expo.modules.rnnetwork.CancellableNetworkProvider
+import expo.modules.rnnetwork.NetworkProvider
+import expo.modules.rnnetwork.RNNetworkRegistry
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONArray

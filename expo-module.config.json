@@ -1,17 +1,7 @@
 {
   "platforms": ["apple", "android"],
   "apple": {
-    "modules": ["RNNetworkModule"],
-    "swiftPackageManager": [
-      {
-        "url": "https://github.com/juanvegu/rn-network-contracts",
-        "requirement": {
-          "kind": "branch",
-          "branch": "main"
-        },
-        "products": ["ScotiaRNNetworkContracts"]
-      }
-    ]
+    "modules": ["RNNetworkModule"]
   },
   "android": {
     "modules": ["expo.modules.rnnetwork.RNNetworkModule"]

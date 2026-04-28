@@ -1,5 +1,4 @@
 import ExpoModulesCore
-import ScotiaRNNetworkContracts
 
 public class RNNetworkModule: Module {
     public func definition() -> ModuleDefinition {
