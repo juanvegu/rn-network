@@ -1,5 +1,7 @@
 package expo.modules.rnnetwork
 
+import com.scotia.rnnetwork.NetworkProvider
+import com.scotia.rnnetwork.RNNetworkRegistry
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONArray
