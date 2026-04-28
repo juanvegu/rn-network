@@ -16,3 +16,7 @@ android {
     abortOnError false
   }
 }
+
+dependencies {
+    api 'com.scotia:rn-network-contracts:1.0.0'
+}

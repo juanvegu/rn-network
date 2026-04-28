@@ -49,6 +49,16 @@ enum NetworkErrorMapper {
             }
         }
 
+        let nsError = error as NSError
+        if nsError.domain == "com.scotia.rnnetwork.http" {
+            let status = nsError.code
+            if (400...499).contains(status) {
+                return NetworkException(code: "HTTP_CLIENT_ERROR", retryable: false, httpStatus: status)
+            } else if (500...599).contains(status) {
+                return NetworkException(code: "HTTP_SERVER_ERROR", retryable: true, httpStatus: status)
+            }
+        }
+
         return NetworkException(code: "UNKNOWN", retryable: false)
     }
 }
