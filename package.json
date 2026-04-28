@@ -1,6 +1,6 @@
 {
   "name": "@scotia/rn-network",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Networking bridge for Expo Brownfield in Scotiabank native apps",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -44,6 +44,6 @@
     "react-native": "*"
   },
   "expo": {
-    "plugin": "./plugins/withRNNetworkExports"
+    "plugin": "build/plugins/withRNNetworkExports"
   }
 }
