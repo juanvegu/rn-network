@@ -15,13 +15,7 @@ public class RNNetworkModule: Module {
 
             let data: Data
             do {
-                if let cancellable = provider as? CancellableNetworkProvider {
-                    // usa cancelación si el país la implementó
-                    data = try await cancellable.request(url: url, method: method, headers: headers, body: body)
-                } else {
-                    // fallback graceful para países que no actualizaron
-                    data = try await provider.request(url: url, method: method, headers: headers, body: body)
-                }
+                data = try await provider.request(url: url, method: method, headers: headers, body: body)
             } catch {
                 throw NetworkErrorMapper.map(error)
             }

@@ -1,1 +1,1 @@
-module.exports = require('./build/plugins/withRNNetworkExports').default;
+module.exports = require('./build/plugin/withRNNetworkExports').default;

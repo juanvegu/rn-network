@@ -1,8 +1,8 @@
 package expo.modules.rnnetwork
 
-import expo.modules.rnnetwork.CancellableNetworkProvider
-import expo.modules.rnnetwork.NetworkProvider
-import expo.modules.rnnetwork.RNNetworkRegistry
+import com.scotia.rnnetwork.NetworkProvider
+import com.scotia.rnnetwork.RNNetworkRegistry
+import com.scotia.rnnetwork.CancellableNetworkProvider
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONArray
@@ -21,13 +21,7 @@ class RNNetworkModule : Module() {
                 ?: throw NetworkException("PROVIDER_NOT_SET", retryable = false)
 
             val bytes = try {
-                if (provider is CancellableNetworkProvider) {
-                    // usa cancelación si el país la implementó
-                    provider.request(url, method, headers, body)
-                } else {
-                    // fallback graceful para países que no actualizaron
-                    provider.request(url, method, headers, body)
-                }
+                provider.request(url, method, headers, body)
             } catch (e: Throwable) {
                 throw NetworkErrorMapper.map(e)
             }
