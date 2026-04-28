@@ -19,6 +19,7 @@ Pod::Spec.new do |s|
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'
+  s.dependency 'ScotiaRNNetworkContracts'
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
@@ -26,6 +27,4 @@ Pod::Spec.new do |s|
   }
 
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
-
-  s.public_header_files = 'ios/NetworkProvider.swift'
 end

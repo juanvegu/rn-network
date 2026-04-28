@@ -4,10 +4,10 @@
     "modules": ["RNNetworkModule"],
     "swiftPackageManager": [
       {
-        "url": "https://github.com/scotia/rn-network-contracts",
+        "url": "https://github.com/juanvegu/rn-network-contracts",
         "requirement": {
-          "kind": "upToNextMajorVersion",
-          "minimumVersion": "1.0.0"
+          "kind": "branch",
+          "branch": "main"
         },
         "products": ["ScotiaRNNetworkContracts"]
       }
