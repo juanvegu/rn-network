@@ -1,5 +1,5 @@
 import Foundation
 
-public final class RNNetworkRegistry {
-    public static var provider: NetworkProvider?
+@objc public final class RNNetworkRegistry: NSObject {
+    @objc public dynamic static var provider: NetworkProvider?
 }
