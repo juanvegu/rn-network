@@ -9,6 +9,8 @@ export type {
   HttpMethod,
   MockNetworkProviderConfig,
 } from './types'
+export type { AppConfig, AppEnvironment, CountryCode, DomainConfig, DomainKey } from './appConfig'
+export { AppConfigProvider, useAppConfig } from './AppConfigContext'
 export { RNNetworkBridge }
 export { MockNetworkProvider } from './MockNetworkProvider'
 

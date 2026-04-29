@@ -16,6 +16,31 @@ class RNNetworkModule : Module() {
             RNNetworkRegistry.provider != null
         }
 
+        Function("getNativeBaseURL") {
+            RNNetworkRegistry.baseURL
+        }
+
+        Function("getNativeAppConfig") {
+            RNNetworkRegistry.appConfig
+        }
+
+        Function("setActiveDomain") { domainKey: String ->
+            val config = RNNetworkRegistry.appConfig?.toMutableMap() ?: return@Function
+            @Suppress("UNCHECKED_CAST")
+            val domains = config["domains"] as? List<Map<String, String>> ?: return@Function
+            val match = domains.firstOrNull { it["key"] == domainKey } ?: return@Function
+            val baseURL = match["baseURL"] ?: return@Function
+            config["activeDomain"] = domainKey
+            RNNetworkRegistry.appConfig = config
+            RNNetworkRegistry.baseURL = baseURL
+        }
+
+        Function("getBaseURLForDomain") { domainKey: String ->
+            @Suppress("UNCHECKED_CAST")
+            val domains = RNNetworkRegistry.appConfig?.get("domains") as? List<Map<String, String>>
+            domains?.firstOrNull { it["key"] == domainKey }?.get("baseURL")
+        }
+
         AsyncFunction("request") { url: String, method: String, headers: Map<String, String>, body: Map<String, Any?>? ->
             val provider = RNNetworkRegistry.provider
                 ?: throw NetworkException("PROVIDER_NOT_SET", retryable = false)

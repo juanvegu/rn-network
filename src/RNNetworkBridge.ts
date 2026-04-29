@@ -4,6 +4,9 @@ import type { HttpMethod, NetworkErrorPayload } from './types'
 interface NativeBridge {
   hasNativeProvider(): boolean
   getNativeBaseURL(): string | null
+  getNativeAppConfig(): Record<string, unknown> | null
+  setActiveDomain(key: string): void
+  getBaseURLForDomain(key: string): string | null
   request(
     url: string,
     method: string,
@@ -53,6 +56,34 @@ export const RNNetworkBridge = {
     if (!mod) return null
     try {
       return typeof mod.getNativeBaseURL === 'function' ? mod.getNativeBaseURL() : null
+    } catch {
+      return null
+    }
+  },
+
+  getNativeAppConfig(): Record<string, unknown> | null {
+    const mod = load()
+    if (!mod) return null
+    try {
+      return typeof mod.getNativeAppConfig === 'function' ? mod.getNativeAppConfig() : null
+    } catch {
+      return null
+    }
+  },
+
+  setActiveDomain(key: string): void {
+    const mod = load()
+    if (!mod) return
+    try {
+      if (typeof mod.setActiveDomain === 'function') mod.setActiveDomain(key)
+    } catch { /* no-op in dev/mock mode */ }
+  },
+
+  getBaseURLForDomain(key: string): string | null {
+    const mod = load()
+    if (!mod) return null
+    try {
+      return typeof mod.getBaseURLForDomain === 'function' ? mod.getBaseURLForDomain(key) : null
     } catch {
       return null
     }
