@@ -79,11 +79,25 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
 
             const filePath = `${brownfieldTargetName}/${file}`
 
-            // Add PBXFileReference — returns null if already present
-            const fileRef = project.addFile(filePath, undefined)
-            const fileRefUUID: string | undefined = fileRef
-                ? fileRef.fileRef
-                : findExistingFileRef(project, filePath)
+            // Find existing PBXFileReference or create one directly.
+            // We avoid project.addFile() because it calls getPBXVariantGroupByKey(undefined)
+            // when no group key is provided, which throws on some xcode package versions.
+            let fileRefUUID: string | undefined = findExistingFileRef(project, filePath)
+            if (!fileRefUUID) {
+                const newUUID: string = project.generateUuid()
+                fileRefUUID = newUUID
+                project.hash.project.objects['PBXFileReference'][newUUID] = {
+                    isa: 'PBXFileReference',
+                    explicitFileType: 'undefined',
+                    fileEncoding: 4,
+                    includeInIndex: 0,
+                    lastKnownFileType: 'sourcecode.swift',
+                    name: file,
+                    path: filePath,
+                    sourceTree: '"<group>"',
+                }
+                project.hash.project.objects['PBXFileReference'][`${newUUID}_comment`] = file
+            }
 
             if (!fileRefUUID) return
 
