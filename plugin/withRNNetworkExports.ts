@@ -52,10 +52,14 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
             )
         }
 
-        // Locate the ScotiaBrownfield Sources build phase UUID directly from the target
+        // Locate the ScotiaBrownfield Sources build phase UUID.
+        // We look up the UUID in PBXSourcesBuildPhase directly — the comment varies
+        // depending on how the phase was created (expo-brownfield uses the target name,
+        // not the generic 'Sources' string).
         const nativeTarget = project.pbxNativeTargetSection()[targetUuid]
+        const pbxSources = project.hash.project.objects['PBXSourcesBuildPhase'] ?? {}
         const sourcesBuildPhaseUUID: string | undefined = (nativeTarget?.buildPhases ?? [])
-            .find((phase: any) => phase.comment === 'Sources')?.value
+            .find((phase: any) => pbxSources[phase.value] !== undefined)?.value
 
         if (!sourcesBuildPhaseUUID) {
             throw new Error(
