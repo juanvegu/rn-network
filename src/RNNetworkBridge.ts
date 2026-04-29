@@ -3,6 +3,7 @@ import type { HttpMethod, NetworkErrorPayload } from './types'
 
 interface NativeBridge {
   hasNativeProvider(): boolean
+  getNativeBaseURL(): string | null
   request(
     url: string,
     method: string,
@@ -44,6 +45,16 @@ export const RNNetworkBridge = {
       return typeof mod.hasNativeProvider === 'function' && mod.hasNativeProvider()
     } catch {
       return false
+    }
+  },
+
+  getNativeBaseURL(): string | null {
+    const mod = load()
+    if (!mod) return null
+    try {
+      return typeof mod.getNativeBaseURL === 'function' ? mod.getNativeBaseURL() : null
+    } catch {
+      return null
     }
   },
 
