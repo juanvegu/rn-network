@@ -1,6 +1,10 @@
-import { ConfigPlugin, withXcodeProject } from '@expo/config-plugins'
+import { ConfigPlugin, withFinalizedMod } from '@expo/config-plugins'
 import * as fs from 'fs'
 import * as path from 'path'
+
+// xcode is a transitive dependency of @expo/config-plugins — always available in Expo projects
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const xcode = require('xcode')
 
 type RNNetworkOptions = {
     brownfieldTarget?: string
@@ -12,17 +16,34 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
 ) => {
     const brownfieldTargetName = options.brownfieldTarget ?? 'ScotiaBrownfield'
 
-    return withXcodeProject(config, (config) => {
-        const projectRoot = config.modRequest.platformProjectRoot
-        const project = config.modResults
+    // withFinalizedMod runs AFTER all withXcodeProject mods (including expo-brownfield's).
+    // That guarantees the ScotiaBrownfield target already exists in the on-disk pbxproj
+    // when our code runs, regardless of plugin order in app.json.
+    return withFinalizedMod(config, ['ios', async (config) => {
+        const platformProjectRoot = config.modRequest.platformProjectRoot
 
-        const targetUuid =
+        // Locate the .xcodeproj folder
+        const xcodeprojs = fs.readdirSync(platformProjectRoot)
+            .filter((f: string) => f.endsWith('.xcodeproj'))
+        if (!xcodeprojs.length) return config
+
+        const pbxprojPath = path.join(
+            platformProjectRoot,
+            xcodeprojs[0],
+            'project.pbxproj'
+        )
+
+        // Parse the pbxproj from disk — expo-brownfield has already created ScotiaBrownfield
+        const project = xcode.project(pbxprojPath)
+        project.parseSync()
+
+        const targetUuid: string | null =
             project.findTargetKey(brownfieldTargetName) ??
             project.findTargetKey(`"${brownfieldTargetName}"`)
 
         if (!targetUuid) {
             const available = Object.entries(project.pbxNativeTargetSection())
-                .filter(([k]) => !k.endsWith('_comment'))
+                .filter(([k]: [string, unknown]) => !k.endsWith('_comment'))
                 .map(([, t]: [string, any]) => t.name)
                 .join(', ')
             throw new Error(
@@ -31,10 +52,7 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
             )
         }
 
-        // Find the ScotiaBrownfield Sources build phase UUID directly from the target object.
-        // We bypass addSourceFile() because when no PBXGroup is named after the target,
-        // addSourceFile falls back to addPluginFile(), which makes buildPhase() return
-        // undefined and buildPhaseObject() fall back to the first Sources phase (main app).
+        // Locate the ScotiaBrownfield Sources build phase UUID directly from the target
         const nativeTarget = project.pbxNativeTargetSection()[targetUuid]
         const sourcesBuildPhaseUUID: string | undefined = (nativeTarget?.buildPhases ?? [])
             .find((phase: any) => phase.comment === 'Sources')?.value
@@ -48,17 +66,16 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
         const iosDir = path.join(__dirname, '..', '..', 'ios')
         const files = ['NetworkProvider.swift', 'RNNetworkRegistry.swift']
 
-        files.forEach(file => {
+        files.forEach((file: string) => {
             const src = path.join(iosDir, file)
-            const dest = path.join(projectRoot, brownfieldTargetName, file)
+            const dest = path.join(platformProjectRoot, brownfieldTargetName, file)
 
             fs.mkdirSync(path.dirname(dest), { recursive: true })
             fs.copyFileSync(src, dest)
 
             const filePath = `${brownfieldTargetName}/${file}`
 
-            // addFile only creates PBXFileReference + group entry — no build phase side effects.
-            // Returns null if the file reference already exists.
+            // Add PBXFileReference — returns null if already present
             const fileRef = project.addFile(filePath, undefined)
             const fileRefUUID: string | undefined = fileRef
                 ? fileRef.fileRef
@@ -66,7 +83,7 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
 
             if (!fileRefUUID) return
 
-            // Skip if already present in the ScotiaBrownfield Sources build phase.
+            // Skip if already in the ScotiaBrownfield Sources build phase
             const sourcesBuildPhase =
                 project.hash.project.objects['PBXSourcesBuildPhase'][sourcesBuildPhaseUUID]
             const alreadyInPhase = (sourcesBuildPhase.files as any[]).some(
@@ -74,7 +91,7 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
             )
             if (alreadyInPhase) return
 
-            // Create the PBXBuildFile entry.
+            // Create PBXBuildFile entry
             const buildFileUUID = project.generateUuid()
             const buildFileComment = `${file} in Sources`
 
@@ -86,15 +103,18 @@ const withRNNetworkExports: ConfigPlugin<RNNetworkOptions> = (
             project.hash.project.objects['PBXBuildFile'][`${buildFileUUID}_comment`] =
                 buildFileComment
 
-            // Add to the correct (ScotiaBrownfield) Sources build phase.
+            // Insert into the correct (ScotiaBrownfield) Sources build phase
             sourcesBuildPhase.files.push({
                 value: buildFileUUID,
                 comment: buildFileComment,
             })
         })
 
+        // Write the modified pbxproj back to disk
+        fs.writeFileSync(pbxprojPath, project.writeSync())
+
         return config
-    })
+    }])
 }
 
 function findExistingFileRef(project: any, filePath: string): string | undefined {
