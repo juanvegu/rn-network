@@ -1,8 +1,8 @@
 package expo.modules.rnnetwork
 
-import com.scotia.rnnetwork.NetworkProvider
-import com.scotia.rnnetwork.RNNetworkRegistry
-import com.scotia.rnnetwork.CancellableNetworkProvider
+import com.scotia.rnnetwork.contracts.NetworkProvider
+import com.scotia.rnnetwork.contracts.RNNetworkRegistry
+import com.scotia.rnnetwork.contracts.CancellableNetworkProvider
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONArray
@@ -16,29 +16,25 @@ class RNNetworkModule : Module() {
             RNNetworkRegistry.provider != null
         }
 
-        Function("getNativeBaseURL") {
-            RNNetworkRegistry.baseURL
-        }
-
         Function("getNativeAppConfig") {
             RNNetworkRegistry.appConfig
-        }
-
-        Function("setActiveDomain") { domainKey: String ->
-            val config = RNNetworkRegistry.appConfig?.toMutableMap() ?: return@Function
-            @Suppress("UNCHECKED_CAST")
-            val domains = config["domains"] as? List<Map<String, String>> ?: return@Function
-            val match = domains.firstOrNull { it["key"] == domainKey } ?: return@Function
-            val baseURL = match["baseURL"] ?: return@Function
-            config["activeDomain"] = domainKey
-            RNNetworkRegistry.appConfig = config
-            RNNetworkRegistry.baseURL = baseURL
         }
 
         Function("getBaseURLForDomain") { domainKey: String ->
             @Suppress("UNCHECKED_CAST")
             val domains = RNNetworkRegistry.appConfig?.get("domains") as? List<Map<String, String>>
             domains?.firstOrNull { it["key"] == domainKey }?.get("baseURL")
+        }
+
+        AsyncFunction("setActiveDomain") { domainKey: String ->
+            val config = RNNetworkRegistry.appConfig?.toMutableMap() ?: return@AsyncFunction
+            @Suppress("UNCHECKED_CAST")
+            val domains = config["domains"] as? List<Map<String, String>> ?: return@AsyncFunction
+            val match = domains.firstOrNull { it["key"] == domainKey } ?: return@AsyncFunction
+            val baseURL = match["baseURL"] ?: return@AsyncFunction
+            config["activeDomain"] = domainKey
+            config["baseURL"] = baseURL
+            RNNetworkRegistry.appConfig = config
         }
 
         AsyncFunction("request") { url: String, method: String, headers: Map<String, String>, body: Map<String, Any?>? ->

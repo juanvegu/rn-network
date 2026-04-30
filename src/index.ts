@@ -33,7 +33,7 @@ export function setBaseURL(url: string): void {
 
 /**
  * Returns the active base URL:
- * - In native mode: reads the value set by the bank via RNNetworkRegistry.baseURL (Swift)
+ * - In native mode: derives from appConfig.activeDomain → domains[].baseURL
  * - Otherwise: returns the JS-side value set by setBaseURL()
  */
 export function getBaseURL(): string | null {

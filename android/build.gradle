@@ -18,4 +18,5 @@ android {
 }
 
 dependencies {
+  implementation 'com.scotia:network-contracts:1.0.0'
 }

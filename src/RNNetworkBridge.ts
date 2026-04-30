@@ -3,9 +3,8 @@ import type { HttpMethod, NetworkErrorPayload } from './types'
 
 interface NativeBridge {
   hasNativeProvider(): boolean
-  getNativeBaseURL(): string | null
   getNativeAppConfig(): Record<string, unknown> | null
-  setActiveDomain(key: string): void
+  setActiveDomain(key: string): Promise<void>
   getBaseURLForDomain(key: string): string | null
   request(
     url: string,
@@ -40,7 +39,6 @@ function isPayload(e: unknown): e is NetworkErrorPayload {
 
 export const RNNetworkBridge = {
   // "available" = the module is linked AND the native side has a registered provider.
-  // placeholder (without hasNativeProvider): false → mock active in __DEV__
   isAvailable(): boolean {
     const mod = load()
     if (!mod) return false
@@ -48,16 +46,6 @@ export const RNNetworkBridge = {
       return typeof mod.hasNativeProvider === 'function' && mod.hasNativeProvider()
     } catch {
       return false
-    }
-  },
-
-  getNativeBaseURL(): string | null {
-    const mod = load()
-    if (!mod) return null
-    try {
-      return typeof mod.getNativeBaseURL === 'function' ? mod.getNativeBaseURL() : null
-    } catch {
-      return null
     }
   },
 
@@ -71,11 +59,20 @@ export const RNNetworkBridge = {
     }
   },
 
-  setActiveDomain(key: string): void {
+  // Derives the active baseURL from appConfig instead of a separate registry field.
+  getNativeBaseURL(): string | null {
+    const config = this.getNativeAppConfig()
+    if (!config) return null
+    const activeDomain = config.activeDomain as string | undefined
+    const domains = config.domains as Array<{ key: string; baseURL: string }> | undefined
+    return domains?.find(d => d.key === activeDomain)?.baseURL ?? null
+  },
+
+  async setActiveDomain(key: string): Promise<void> {
     const mod = load()
     if (!mod) return
     try {
-      if (typeof mod.setActiveDomain === 'function') mod.setActiveDomain(key)
+      if (typeof mod.setActiveDomain === 'function') await mod.setActiveDomain(key)
     } catch { /* no-op in dev/mock mode */ }
   },
 
