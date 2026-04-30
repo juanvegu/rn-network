@@ -2,7 +2,10 @@ import { ConfigPlugin, withDangerousMod } from '@expo/config-plugins'
 import * as fs from 'fs'
 import * as path from 'path'
 
-const SPECS_SOURCE = "source 'https://github.com/juanvegu/scotia-podspecs.git'"
+const SOURCES = [
+    "source 'https://github.com/juanvegu/scotia-podspecs.git'",
+    "source 'https://cdn.cocoapods.org/'",
+].join('\n')
 
 const withNetworkContracts: ConfigPlugin = (config) => {
     return withDangerousMod(config, ['ios', (config) => {
@@ -12,8 +15,10 @@ const withNetworkContracts: ConfigPlugin = (config) => {
         let podfile = fs.readFileSync(podfilePath, 'utf-8')
         if (podfile.includes('scotia-podspecs')) return config
 
-        // Prepend private specs source before the default CocoaPods source
-        fs.writeFileSync(podfilePath, `${SPECS_SOURCE}\n` + podfile)
+        // Prepend both sources — private first, then public CDN.
+        // When sources are declared explicitly CocoaPods only uses those,
+        // so the public CDN must also be listed or public pods won't resolve.
+        fs.writeFileSync(podfilePath, `${SOURCES}\n` + podfile)
         return config
     }])
 }
