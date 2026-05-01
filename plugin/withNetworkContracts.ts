@@ -13,7 +13,7 @@ const withNetworkContracts: ConfigPlugin = (config) => {
         if (!fs.existsSync(podfilePath)) return config
 
         let podfile = fs.readFileSync(podfilePath, 'utf-8')
-        if (podfile.includes('scotia-podspecs')) return config
+        if (podfile.includes('scotia-podspecs') && podfile.includes('cdn.cocoapods.org')) return config
 
         // Prepend both sources — private first, then public CDN.
         // When sources are declared explicitly CocoaPods only uses those,
