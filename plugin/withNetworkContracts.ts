@@ -7,18 +7,44 @@ const SOURCES = [
     "source 'https://cdn.cocoapods.org/'",
 ].join('\n')
 
+const PRE_INSTALL_HOOK = `
+# Forzar NetworkContracts a dynamic framework
+pre_install do |installer|
+  installer.pod_targets.each do |pod|
+    if pod.name == 'NetworkContracts'
+      def pod.build_type
+        Pod::BuildType.dynamic_framework
+      end
+    end
+  end
+end
+`
+
 const withNetworkContracts: ConfigPlugin = (config) => {
     return withDangerousMod(config, ['ios', (config) => {
         const podfilePath = path.join(config.modRequest.platformProjectRoot, 'Podfile')
         if (!fs.existsSync(podfilePath)) return config
 
         let podfile = fs.readFileSync(podfilePath, 'utf-8')
-        if (podfile.includes('scotia-podspecs') && podfile.includes('cdn.cocoapods.org')) return config
 
-        // Prepend both sources — private first, then public CDN.
-        // When sources are declared explicitly CocoaPods only uses those,
-        // so the public CDN must also be listed or public pods won't resolve.
-        fs.writeFileSync(podfilePath, `${SOURCES}\n` + podfile)
+        const sourcesAlreadyPresent =
+            podfile.includes('scotia-podspecs') &&
+            podfile.includes('cdn.cocoapods.org')
+
+        if (!sourcesAlreadyPresent) {
+            podfile = `${SOURCES}\n${podfile}`
+        }
+
+        const hookAlreadyPresent = podfile.includes("pod.name == 'NetworkContracts'")
+
+        if (!hookAlreadyPresent) {
+            podfile = podfile.replace(
+                /^target ['"][^'"]+['"] do/m,
+                `${PRE_INSTALL_HOOK}\n$&`
+            )
+        }
+
+        fs.writeFileSync(podfilePath, podfile)
         return config
     }])
 }
