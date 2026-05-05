@@ -16,6 +16,11 @@ class RNNetworkModule : Module() {
             RNNetworkRegistry.provider != null
         }
 
+        Function("debugIdentity") {
+            "registryId=${System.identityHashCode(RNNetworkRegistry)} " +
+                "classloader=${RNNetworkRegistry::class.java.classLoader}"
+        }
+
         Function("getNativeAppConfig") {
             RNNetworkRegistry.appConfig
         }

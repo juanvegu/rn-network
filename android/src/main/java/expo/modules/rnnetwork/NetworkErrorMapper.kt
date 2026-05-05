@@ -40,14 +40,25 @@ object NetworkErrorMapper {
                 NetworkException("TIMEOUT", retryable = true)
             is UnknownHostException ->
                 NetworkException("NO_CONNECTIVITY", retryable = true)
-            is java.io.IOException -> when {
-                error.message?.contains("timeout", ignoreCase = true) == true ->
-                    NetworkException("TIMEOUT", retryable = true)
-                error.message?.contains("unable to resolve", ignoreCase = true) == true ||
-                error.message?.contains("no route to host", ignoreCase = true) == true ->
-                    NetworkException("NO_CONNECTIVITY", retryable = true)
-                else ->
-                    NetworkException("UNKNOWN", retryable = false)
+            is java.io.IOException -> {
+                val message = error.message.orEmpty()
+                val httpDomainStatus = message
+                    .substringAfter("com.scotia.rnnetwork.http:", "")
+                    .toIntOrNull()
+                when {
+                    httpDomainStatus != null -> when (httpDomainStatus) {
+                        in 400..499 -> NetworkException("HTTP_CLIENT_ERROR", retryable = false, httpStatus = httpDomainStatus)
+                        in 500..599 -> NetworkException("HTTP_SERVER_ERROR", retryable = true, httpStatus = httpDomainStatus)
+                        else -> NetworkException("HTTP_ERROR", retryable = false, httpStatus = httpDomainStatus)
+                    }
+                    message.contains("timeout", ignoreCase = true) ->
+                        NetworkException("TIMEOUT", retryable = true)
+                    message.contains("unable to resolve", ignoreCase = true) ||
+                    message.contains("no route to host", ignoreCase = true) ->
+                        NetworkException("NO_CONNECTIVITY", retryable = true)
+                    else ->
+                        NetworkException("UNKNOWN", retryable = false)
+                }
             }
             else -> NetworkException("UNKNOWN", retryable = false)
         }

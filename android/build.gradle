@@ -17,6 +17,10 @@ android {
   }
 }
 
+repositories {
+  maven { url 'https://jitpack.io' }
+}
+
 dependencies {
-  implementation 'com.scotia:network-contracts:1.0.0'
+  implementation 'com.github.juanvegu:rn-network-contracts:1.0.8'
 }
