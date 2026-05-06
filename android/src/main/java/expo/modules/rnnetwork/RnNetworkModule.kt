@@ -3,6 +3,7 @@ package expo.modules.rnnetwork
 import com.scotia.rnnetwork.contracts.NetworkProvider
 import com.scotia.rnnetwork.contracts.RNNetworkRegistry
 import com.scotia.rnnetwork.contracts.CancellableNetworkProvider
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONArray
@@ -42,7 +43,7 @@ class RNNetworkModule : Module() {
             RNNetworkRegistry.appConfig = config
         }
 
-        AsyncFunction("request") { url: String, method: String, headers: Map<String, String>, body: Map<String, Any?>? ->
+        AsyncFunction("request") Coroutine { url: String, method: String, headers: Map<String, String>, body: Map<String, Any?>? ->
             val provider = RNNetworkRegistry.provider
                 ?: throw NetworkException("PROVIDER_NOT_SET", retryable = false)
 
