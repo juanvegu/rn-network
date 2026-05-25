@@ -1,8 +1,6 @@
 package expo.modules.rnnetwork
 
-import com.scotia.rnnetwork.contracts.NetworkProvider
 import com.scotia.rnnetwork.contracts.RNNetworkRegistry
-import com.scotia.rnnetwork.contracts.CancellableNetworkProvider
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -12,6 +10,20 @@ import org.json.JSONObject
 class RNNetworkModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("RNNetworkModule")
+
+        Events("sessionExpired")
+
+        OnCreate {
+            // Bridge the native session-expired hook to a JS event. The host invokes
+            // RNNetworkRegistry.onSessionExpired?.invoke() when it detects the session is gone.
+            RNNetworkRegistry.onSessionExpired = {
+                this@RNNetworkModule.sendEvent("sessionExpired", emptyMap<String, Any?>())
+            }
+        }
+
+        OnDestroy {
+            RNNetworkRegistry.onSessionExpired = null
+        }
 
         Function("hasNativeProvider") {
             RNNetworkRegistry.provider != null
@@ -23,42 +35,58 @@ class RNNetworkModule : Module() {
         }
 
         Function("getNativeAppConfig") {
-            RNNetworkRegistry.appConfig
+            RNNetworkRegistry.appConfig?.let { c ->
+                mapOf(
+                    "country" to c.country,
+                    "environment" to c.environment,
+                    "domains" to c.domains.map { mapOf("key" to it.key, "baseURL" to it.baseURL) },
+                )
+            }
+        }
+
+        Function("getNativeActiveDomain") {
+            RNNetworkRegistry.activeDomain
         }
 
         Function("getBaseURLForDomain") { domainKey: String ->
-            @Suppress("UNCHECKED_CAST")
-            val domains = RNNetworkRegistry.appConfig?.get("domains") as? List<Map<String, String>>
-            domains?.firstOrNull { it["key"] == domainKey }?.get("baseURL")
+            RNNetworkRegistry.appConfig?.domains?.firstOrNull { it.key == domainKey }?.baseURL
         }
 
         AsyncFunction("setActiveDomain") { domainKey: String ->
-            val config = RNNetworkRegistry.appConfig?.toMutableMap() ?: return@AsyncFunction
-            @Suppress("UNCHECKED_CAST")
-            val domains = config["domains"] as? List<Map<String, String>> ?: return@AsyncFunction
-            val match = domains.firstOrNull { it["key"] == domainKey } ?: return@AsyncFunction
-            val baseURL = match["baseURL"] ?: return@AsyncFunction
-            config["activeDomain"] = domainKey
-            config["baseURL"] = baseURL
-            RNNetworkRegistry.appConfig = config
+            val domains = RNNetworkRegistry.appConfig?.domains ?: return@AsyncFunction
+            if (domains.none { it.key == domainKey }) return@AsyncFunction
+            RNNetworkRegistry.activeDomain = domainKey
+        }
+
+        AsyncFunction("cancel") { requestId: String ->
+            RNNetworkRegistry.provider?.cancel(requestId)
         }
 
         AsyncFunction("request") Coroutine { url: String, method: String, headers: Map<String, String>, body: Map<String, Any?>? ->
             val provider = RNNetworkRegistry.provider
                 ?: throw NetworkException("PROVIDER_NOT_SET", retryable = false)
 
-            val bytes = try {
+            val response = try {
                 provider.request(url, method, headers, body)
             } catch (e: Throwable) {
                 throw NetworkErrorMapper.map(e)
             }
 
-            val json = try {
-                JSONObject(String(bytes, Charsets.UTF_8))
-            } catch (e: Exception) {
-                throw NetworkException("UNKNOWN", retryable = false)
+            // Central rule: only 2xx is success. The host can't "forget" to throw anymore.
+            if (response.statusCode !in 200..299) {
+                val retryable = response.statusCode >= 500
+                val code = if (response.statusCode < 500) "HTTP_CLIENT_ERROR" else "HTTP_SERVER_ERROR"
+                throw NetworkException(code, retryable = retryable, httpStatus = response.statusCode)
             }
 
+            val data = response.data
+            if (data == null || data.isEmpty()) return@Coroutine emptyMap<String, Any?>()
+
+            val json = try {
+                JSONObject(String(data, Charsets.UTF_8))
+            } catch (e: Exception) {
+                throw NetworkException("INVALID_RESPONSE_BODY", retryable = false)
+            }
             jsonToMap(json)
         }
     }

@@ -1,39 +1,64 @@
 package expo.modules.rnnetwork
 
+import com.scotia.rnnetwork.contracts.NetworkError
 import expo.modules.kotlin.exception.CodedException
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
-// Función privada de paquete para construir el código JSON — se llama desde el constructor de NetworkException.
-private fun buildCode(code: String, retryable: Boolean, httpStatus: Int?): String =
+// Builds the JSON payload the JS side reconstructs from `e.code`.
+private fun buildCode(
+    code: String,
+    retryable: Boolean,
+    httpStatus: Int?,
+    message: String?,
+    info: Map<String, Any?>?,
+): String =
     try {
         val obj = JSONObject()
         obj.put("code", code)
         obj.put("retryable", retryable)
         httpStatus?.let { obj.put("httpStatus", it) }
+        message?.let { obj.put("message", it) }
+        info?.let { obj.put("info", JSONObject(it)) }
         obj.toString()
     } catch (e: Exception) {
         code
     }
 
-// El campo code lleva el NetworkErrorPayload completo como JSON.
-// El lado JS parsea e.code para reconstruir { code, retryable, httpStatus? }.
 class NetworkException(
     networkCode: String,
     retryable: Boolean,
-    httpStatus: Int? = null
+    httpStatus: Int? = null,
+    networkMessage: String? = null,
+    info: Map<String, Any?>? = null,
 ) : CodedException(
-    buildCode(networkCode, retryable, httpStatus),
-    "Network error: $networkCode",
-    null
+    buildCode(networkCode, retryable, httpStatus, networkMessage, info),
+    networkMessage ?: "Network error: $networkCode",
+    null,
 )
 
 object NetworkErrorMapper {
     fun map(error: Throwable): NetworkException {
         if (error is NetworkException) return error
+
+        // Typed error coming from the host's provider — pass it through verbatim.
+        if (error is NetworkError) {
+            return NetworkException(
+                networkCode = error.code,
+                retryable = error.retryable,
+                httpStatus = error.httpStatus,
+                networkMessage = error.message,
+                info = error.info,
+            )
+        }
+
         return when (error) {
+            // Coroutine cooperative cancellation flows here when the request is aborted.
+            is CancellationException ->
+                NetworkException("CANCELLED", retryable = false)
             is SSLException ->
                 NetworkException("SSL_PINNING_FAILED", retryable = false)
             is SocketTimeoutException ->

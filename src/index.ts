@@ -4,12 +4,14 @@ import type { HttpMethod, NetworkErrorPayload, NetworkProvider } from './types'
 
 export type {
   NetworkErrorCode,
+  StandardNetworkErrorCode,
   NetworkErrorPayload,
   NetworkProvider,
   HttpMethod,
   MockNetworkProviderConfig,
 } from './types'
-export type { AppConfig, AppEnvironment, CountryCode, DomainConfig, DomainKey } from './appConfig'
+export type { AppConfig, CountryCode, DomainConfig, DomainKey } from './appConfig'
+export { parseAppConfig } from './appConfig'
 export { AppConfigProvider, useAppConfig } from './AppConfigContext'
 export { RNNetworkBridge }
 export { MockNetworkProvider } from './MockNetworkProvider'
@@ -40,6 +42,19 @@ export function getBaseURL(): string | null {
   return RNNetworkBridge.getNativeBaseURL() ?? registry.baseURL
 }
 
+/** Cancel an in-flight request by ID (no-op if the provider doesn't override cancel). */
+export function cancelRequest(requestId: string): Promise<void> {
+  return RNNetworkBridge.cancel(requestId)
+}
+
+/**
+ * Subscribe to session-expired events emitted by the native host.
+ * Returns an unsubscribe function.
+ */
+export function onSessionExpired(handler: () => void): () => void {
+  return RNNetworkBridge.onSessionExpired(handler)
+}
+
 /** Prepend the active base URL if the given url is a relative path. */
 function resolveURL(url: string): string {
   if (url.startsWith('http://') || url.startsWith('https://')) return url
@@ -57,13 +72,16 @@ export async function request(
 ): Promise<Record<string, unknown>> {
   const resolvedURL = resolveURL(url)
 
+  // If the host registered a native provider, that wins.
   if (RNNetworkBridge.isAvailable()) {
     return RNNetworkBridge.request(resolvedURL, method, headers, body)
   }
 
-  const mock = registry.jsProvider
-  if (__DEV__ && mock) {
-    return mock.request(resolvedURL, method, headers, body)
+  // Otherwise fall back to whatever JS provider the app registered (typically a mock).
+  // The app is responsible for not registering a mock in production builds.
+  const jsProvider = registry.jsProvider
+  if (jsProvider) {
+    return jsProvider.request(resolvedURL, method, headers, body)
   }
 
   throw { code: 'PROVIDER_NOT_SET', retryable: false } satisfies NetworkErrorPayload

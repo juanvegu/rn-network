@@ -1,11 +1,17 @@
 import { requireNativeModule } from 'expo-modules-core'
+import type { EventSubscription } from 'expo-modules-core'
+import { parseAppConfig, type AppConfig } from './appConfig'
 import type { HttpMethod, NetworkErrorPayload } from './types'
 
 interface NativeBridge {
   hasNativeProvider(): boolean
   getNativeAppConfig(): Record<string, unknown> | null
+  getNativeActiveDomain(): string | null
   setActiveDomain(key: string): Promise<void>
   getBaseURLForDomain(key: string): string | null
+  cancel(requestId: string): Promise<void>
+  addListener(eventName: string): void
+  removeListeners(count: number): void
   request(
     url: string,
     method: string,
@@ -14,12 +20,16 @@ interface NativeBridge {
   ): Promise<Record<string, unknown>>
 }
 
-let _native: NativeBridge | null | undefined = undefined
+interface NativeEventEmitter {
+  addListener(eventName: string, listener: (...args: unknown[]) => void): EventSubscription
+}
 
-function load(): NativeBridge | null {
+let _native: (NativeBridge & Partial<NativeEventEmitter>) | null | undefined = undefined
+
+function load(): (NativeBridge & Partial<NativeEventEmitter>) | null {
   if (_native !== undefined) return _native
   try {
-    _native = requireNativeModule<NativeBridge>('RNNetworkModule')
+    _native = requireNativeModule<NativeBridge & Partial<NativeEventEmitter>>('RNNetworkModule')
   } catch {
     _native = null
   }
@@ -49,23 +59,32 @@ export const RNNetworkBridge = {
     }
   },
 
-  getNativeAppConfig(): Record<string, unknown> | null {
+  getNativeAppConfig(): AppConfig | null {
     const mod = load()
     if (!mod) return null
     try {
-      return typeof mod.getNativeAppConfig === 'function' ? mod.getNativeAppConfig() : null
+      const raw = typeof mod.getNativeAppConfig === 'function' ? mod.getNativeAppConfig() : null
+      return parseAppConfig(raw)
     } catch {
       return null
     }
   },
 
-  // Derives the active baseURL from appConfig instead of a separate registry field.
+  getNativeActiveDomain(): string | null {
+    const mod = load()
+    if (!mod) return null
+    try {
+      return typeof mod.getNativeActiveDomain === 'function' ? mod.getNativeActiveDomain() : null
+    } catch {
+      return null
+    }
+  },
+
   getNativeBaseURL(): string | null {
     const config = this.getNativeAppConfig()
-    if (!config) return null
-    const activeDomain = config.activeDomain as string | undefined
-    const domains = config.domains as Array<{ key: string; baseURL: string }> | undefined
-    return domains?.find(d => d.key === activeDomain)?.baseURL ?? null
+    const activeDomain = this.getNativeActiveDomain()
+    if (!config || !activeDomain) return null
+    return config.domains.find((d) => d.key === activeDomain)?.baseURL ?? null
   },
 
   async setActiveDomain(key: string): Promise<void> {
@@ -86,6 +105,23 @@ export const RNNetworkBridge = {
     }
   },
 
+  async cancel(requestId: string): Promise<void> {
+    const mod = load()
+    if (!mod) return
+    try {
+      if (typeof mod.cancel === 'function') await mod.cancel(requestId)
+    } catch { /* no-op */ }
+  },
+
+  onSessionExpired(handler: () => void): () => void {
+    const mod = load()
+    if (!mod || typeof mod.addListener !== 'function') {
+      return () => {}
+    }
+    const subscription = mod.addListener('sessionExpired', () => handler())
+    return () => subscription.remove()
+  },
+
   async request(
     url: string,
     method: HttpMethod,
@@ -98,12 +134,13 @@ export const RNNetworkBridge = {
     }
     try {
       return await mod.request(url, method, headers, body ?? null)
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (isPayload(e)) throw e
 
-      if (typeof e?.code === 'string') {
+      const err = e as { code?: unknown }
+      if (typeof err?.code === 'string') {
         let parsed: unknown
-        try { parsed = JSON.parse(e.code) } catch { /* invalid JSON in code */ }
+        try { parsed = JSON.parse(err.code) } catch { /* invalid JSON in code */ }
         if (isPayload(parsed)) throw parsed
       }
 
