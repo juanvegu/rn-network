@@ -52,14 +52,14 @@ public class RNNetworkModule: Module {
             RNNetworkRegistry.provider?.cancel(requestId: requestId)
         }
 
-        AsyncFunction("request") { (url: String, method: String, headers: [String: String], body: [String: Any]?) async throws -> [String: Any] in
+        AsyncFunction("request") { (requestId: String, url: String, method: String, headers: [String: String], body: [String: Any]?) async throws -> [String: Any] in
             guard let provider = RNNetworkRegistry.provider else {
                 throw NetworkException(code: "PROVIDER_NOT_SET", retryable: false)
             }
 
             let response: NetworkResponse
             do {
-                response = try await provider.request(url: url, method: method, headers: headers, body: body)
+                response = try await provider.request(requestId: requestId, url: url, method: method, headers: headers, body: body)
             } catch {
                 throw NetworkErrorMapper.map(error)
             }
@@ -71,13 +71,22 @@ public class RNNetworkModule: Module {
                 throw NetworkException(code: code, retryable: retryable, httpStatus: response.statusCode)
             }
 
-            // 204 / empty body → {}
-            guard let data = response.data, !data.isEmpty else { return [:] }
-
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw NetworkException(code: "INVALID_RESPONSE_BODY", retryable: false)
+            // Parse body (empty/204 → {}; non-JSON → error)
+            let bodyDict: [String: Any]
+            if let data = response.data, !data.isEmpty {
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw NetworkException(code: "INVALID_RESPONSE_BODY", retryable: false)
+                }
+                bodyDict = json
+            } else {
+                bodyDict = [:]
             }
-            return json
+
+            return [
+                "body": bodyDict,
+                "statusCode": response.statusCode,
+                "headers": response.headers,
+            ]
         }
     }
 }

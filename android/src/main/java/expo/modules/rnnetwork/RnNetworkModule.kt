@@ -62,12 +62,12 @@ class RNNetworkModule : Module() {
             RNNetworkRegistry.provider?.cancel(requestId)
         }
 
-        AsyncFunction("request") Coroutine { url: String, method: String, headers: Map<String, String>, body: Map<String, Any?>? ->
+        AsyncFunction("request") Coroutine { requestId: String, url: String, method: String, headers: Map<String, String>, body: Map<String, Any?>? ->
             val provider = RNNetworkRegistry.provider
                 ?: throw NetworkException("PROVIDER_NOT_SET", retryable = false)
 
             val response = try {
-                provider.request(url, method, headers, body)
+                provider.request(requestId, url, method, headers, body)
             } catch (e: Throwable) {
                 throw NetworkErrorMapper.map(e)
             }
@@ -80,14 +80,21 @@ class RNNetworkModule : Module() {
             }
 
             val data = response.data
-            if (data == null || data.isEmpty()) return@Coroutine emptyMap<String, Any?>()
-
-            val json = try {
-                JSONObject(String(data, Charsets.UTF_8))
-            } catch (e: Exception) {
-                throw NetworkException("INVALID_RESPONSE_BODY", retryable = false)
+            val bodyMap: Map<String, Any?> = if (data == null || data.isEmpty()) {
+                emptyMap()
+            } else {
+                try {
+                    jsonToMap(JSONObject(String(data, Charsets.UTF_8)))
+                } catch (e: Exception) {
+                    throw NetworkException("INVALID_RESPONSE_BODY", retryable = false)
+                }
             }
-            jsonToMap(json)
+
+            mapOf(
+                "body" to bodyMap,
+                "statusCode" to response.statusCode,
+                "headers" to response.headers,
+            )
         }
     }
 }

@@ -1,4 +1,10 @@
-import type { HttpMethod, MockNetworkProviderConfig, NetworkErrorPayload, NetworkProvider } from './types'
+import type {
+  HttpMethod,
+  MockNetworkProviderConfig,
+  NetworkErrorPayload,
+  NetworkProvider,
+  NetworkResponse,
+} from './types'
 
 /**
  * Lightweight in-memory mock used when the native provider is not registered.
@@ -8,7 +14,7 @@ import type { HttpMethod, MockNetworkProviderConfig, NetworkErrorPayload, Networ
  * - `'GET /path'` — matches only the specified method
  *
  * Route values may be:
- * - a JSON object — returned as the response body
+ * - a JSON object — returned as the response body (statusCode = 200, no headers)
  * - a `NetworkErrorPayload` (object with `code` and `retryable`) — thrown as an error
  *   (useful to exercise SESSION_EXPIRED / TIMEOUT paths in tests)
  */
@@ -24,7 +30,7 @@ export class MockNetworkProvider implements NetworkProvider {
     method: HttpMethod,
     _headers: Record<string, string>,
     _body?: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
+  ): Promise<NetworkResponse> {
     const match = this.findRoute(method, url)
 
     if (match === null) {
@@ -33,7 +39,8 @@ export class MockNetworkProvider implements NetworkProvider {
 
     const response = this.routes.get(match)!
     if (isErrorPayload(response)) throw response as unknown as NetworkErrorPayload
-    return response
+
+    return { body: response, statusCode: 200, headers: {} }
   }
 
   private findRoute(method: HttpMethod, url: string): string | null {

@@ -1,7 +1,7 @@
 import { requireNativeModule } from 'expo-modules-core'
 import type { EventSubscription } from 'expo-modules-core'
 import { parseAppConfig, type AppConfig } from './appConfig'
-import type { HttpMethod, NetworkErrorPayload } from './types'
+import type { HttpMethod, NetworkErrorPayload, NetworkResponse } from './types'
 
 interface NativeBridge {
   hasNativeProvider(): boolean
@@ -13,11 +13,16 @@ interface NativeBridge {
   addListener(eventName: string): void
   removeListeners(count: number): void
   request(
+    requestId: string,
     url: string,
     method: string,
     headers: Record<string, string>,
     body: Record<string, unknown> | null
-  ): Promise<Record<string, unknown>>
+  ): Promise<{
+    body: Record<string, unknown>
+    statusCode: number
+    headers: Record<string, string>
+  }>
 }
 
 interface NativeEventEmitter {
@@ -123,17 +128,18 @@ export const RNNetworkBridge = {
   },
 
   async request(
+    requestId: string,
     url: string,
     method: HttpMethod,
     headers: Record<string, string>,
     body?: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
+  ): Promise<NetworkResponse> {
     const mod = load()
     if (!mod) {
       throw { code: 'PROVIDER_NOT_SET', retryable: false } satisfies NetworkErrorPayload
     }
     try {
-      return await mod.request(url, method, headers, body ?? null)
+      return await mod.request(requestId, url, method, headers, body ?? null)
     } catch (e: unknown) {
       if (isPayload(e)) throw e
 
