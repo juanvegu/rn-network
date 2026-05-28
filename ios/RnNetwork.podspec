@@ -16,10 +16,12 @@ Pod::Spec.new do |s|
   }
   s.swift_version  = '5.9'
   s.source         = { git: '' }
-  s.static_framework = true
+  s.static_framework = false
 
   s.dependency 'ExpoModulesCore'
-  s.dependency 'NetworkContracts'
+  s.spm_dependency 'NetworkContracts',
+    :url => 'https://github.com/juanvegu/rn-network-contracts.git',
+    :branch => 'main'
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
