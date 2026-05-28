@@ -1,12 +1,12 @@
-# 04 — Referencia API
+# 04 · Referencia API
 
-Referencia completa de firmas, tipos y comportamientos. Esta sección es de **consulta**, no para leerse de corrido.
+Referencia de firmas, tipos y comportamientos. Sección de **consulta**, no para leerse de corrido.
 
-## Páginas
-
-- [API JS de `@scotia/rn-network`](01-rn-network-api-js.md) — funciones exportadas, hooks, componentes.
-- [Tipos](02-rn-network-tipos.md) — `HttpMethod`, `NetworkErrorCode`, `NetworkErrorPayload`, `AppConfig`, etc.
-- [Contracts Android (Kotlin)](03-contracts-android.md) — `NetworkProvider`, `RNNetworkRegistry`, `CancellableNetworkProvider`.
-- [Contracts iOS (Swift)](04-contracts-ios.md) — equivalentes Swift.
-- [Manejo de errores](05-manejo-de-errores.md) — tabla completa de códigos y semántica de `retryable`.
-- [Troubleshooting](06-troubleshooting.md) — síntomas comunes y soluciones.
+| Archivo | Contenido |
+|---|---|
+| [01 · API JS](01-rn-network-api-js.md) | Todas las exportaciones de `@scotia/rn-network` con firma y comportamiento |
+| [02 · Tipos TS](02-rn-network-tipos.md) | `AppConfig`, `NetworkResponse`, `NetworkErrorPayload`, `RequestOptions`, etc. |
+| [03 · Contracts Android](03-contracts-android.md) | `NetworkProvider`, `NetworkResponse`, `NetworkError`, `AppConfig`, `RNNetworkRegistry` en Kotlin |
+| [04 · Contracts iOS](04-contracts-ios.md) | Equivalentes Swift |
+| [05 · Manejo de errores](05-manejo-de-errores.md) | Tabla completa de códigos estándar y cuándo aparece cada uno |
+| [06 · Troubleshooting](06-troubleshooting.md) | Síntomas comunes y diagnóstico |

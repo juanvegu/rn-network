@@ -1,32 +1,48 @@
 # API JS de `@scotia/rn-network`
 
-Todas las exportaciones del módulo (`src/index.ts`).
+Exportaciones de `src/index.ts`.
 
-## Funciones
+## Requests
 
-### `request(url, method?, headers?, body?)`
+### `request<T>(url, method?, headers?, body?, options?)`
 
 ```typescript
-function request(
+function request<T = Record<string, unknown>>(
   url: string,
-  method: HttpMethod = 'GET',
-  headers: Record<string, string> = {},
-  body?: Record<string, unknown>
-): Promise<Record<string, unknown>>
+  method?: HttpMethod = 'GET',
+  headers?: Record<string, string> = {},
+  body?: Record<string, unknown>,
+  options?: RequestOptions = {}
+): Promise<NetworkResponse<T>>
 ```
 
-Hace una request HTTP delegando al provider activo.
+- `url`: absoluta o relativa al base URL activo.
+- `method`: `'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'`.
+- `headers`: opcional, merged con los que aplique el host nativo.
+- `body`: opcional, serializado como JSON por el host.
+- `options.timeoutMs`: override del timeout global. `0` desactiva.
+- `options.requestId`: override del UUID autogenerado.
 
-| Parámetro | Tipo | Default | Descripción |
-|---|---|---|---|
-| `url` | `string` | — | Absoluto (`http(s)://...`) o relativo (se prepende el `baseURL`). |
-| `method` | `HttpMethod` | `'GET'` | Método HTTP. |
-| `headers` | `Record<string, string>` | `{}` | Headers planos. |
-| `body` | `Record<string, unknown>` | `undefined` | Body JSON-serializable. |
+Resuelve con `{ body, statusCode, headers }`. Rechaza con `NetworkErrorPayload`.
 
-**Retorna**: `Promise<Record<string, unknown>>` — la respuesta JSON parseada (siempre objeto raíz).
+### `cancelRequest(requestId)`
 
-**Lanza**: `NetworkErrorPayload` cuando falla. Ver [Manejo de errores](05-manejo-de-errores.md).
+```typescript
+function cancelRequest(requestId: string): Promise<void>
+```
+
+Best-effort. Si el provider no implementa `cancel`, no-op silencioso.
+
+### `setRequestTimeout(ms)` / `getRequestTimeout()`
+
+```typescript
+function setRequestTimeout(ms: number): void
+function getRequestTimeout(): number
+```
+
+Default `30_000`. `0` desactiva el timeout cliente.
+
+## Configuración
 
 ### `setProvider(provider)`
 
@@ -34,7 +50,7 @@ Hace una request HTTP delegando al provider activo.
 function setProvider(provider: NetworkProvider): void
 ```
 
-Registra un provider JS. **Solo se usa en `__DEV__`** — en release builds el valor se ignora.
+Registra un `NetworkProvider` JS (típicamente un `MockNetworkProvider`). Solo se usa si `isAvailable() === false`.
 
 ### `hasProvider()`
 
@@ -42,7 +58,7 @@ Registra un provider JS. **Solo se usa en `__DEV__`** — en release builds el v
 function hasProvider(): boolean
 ```
 
-Retorna `true` si hay un provider JS registrado (independiente del nativo).
+True si registraste un provider JS via `setProvider`.
 
 ### `isAvailable()`
 
@@ -50,110 +66,84 @@ Retorna `true` si hay un provider JS registrado (independiente del nativo).
 function isAvailable(): boolean
 ```
 
-Retorna `true` si:
+True si el módulo nativo está linkeado **y** el host registró un `RNNetworkRegistry.provider`.
 
-1. El módulo nativo `RNNetworkModule` está linkeado en el binario, **y**
-2. El módulo nativo confirma que `RNNetworkRegistry.provider != null` (la app host registró su provider).
-
-Si retorna `false`, `request()` caerá al `MockNetworkProvider` JS (si está en `__DEV__`) o lanzará `PROVIDER_NOT_SET`.
-
-### `setBaseURL(url)`
+### `setBaseURL(url)` / `getBaseURL()`
 
 ```typescript
 function setBaseURL(url: string): void
-```
-
-Establece el `baseURL` del lado JS. Se aplica solo cuando no hay `baseURL` derivado del nativo. Recorta automáticamente el `/` final.
-
-### `getBaseURL()`
-
-```typescript
 function getBaseURL(): string | null
 ```
 
-Retorna el `baseURL` activo:
+- `setBaseURL` solo aplica en modo JS (sin host). Sin trailing slash.
+- `getBaseURL` deriva primero del host (`activeDomain` → `domains[].baseURL`) y cae al JS-side si no hay.
 
-1. **Modo nativo**: deriva de `RNNetworkRegistry.appConfig.activeDomain` → entrada en `domains`.
-2. **Modo JS**: el valor seteado con `setBaseURL()`.
-3. Si ninguno aplica, retorna `null`.
+## Eventos
 
-## Components y hooks
+### `onSessionExpired(handler)`
+
+```typescript
+function onSessionExpired(handler: () => void): () => void
+```
+
+Subscribe al evento push emitido cuando el host invoca `RNNetworkRegistry.onSessionExpired?()`. Retorna unsubscribe.
+
+## React
 
 ### `AppConfigProvider`
 
 ```typescript
-function AppConfigProvider(props: {
+interface AppConfigProviderProps {
   initialConfig: AppConfig
+  initialActiveDomain?: DomainKey
   children: React.ReactNode
-}): JSX.Element
+}
 ```
-
-React context provider que expone `config` y `setActiveDomain` a través de `useAppConfig()`.
 
 ### `useAppConfig()`
 
 ```typescript
 function useAppConfig(): {
   config: AppConfig
+  activeDomain: DomainKey | undefined
   setActiveDomain: (key: DomainKey) => void
 }
 ```
 
-Hook para leer la config y cambiar el dominio activo. **Lanza** si se usa fuera de un `AppConfigProvider`:
+Throws si se usa fuera del provider.
 
+## Bridge directo
+
+`RNNetworkBridge` se exporta como escape-hatch para casos avanzados:
+
+- `RNNetworkBridge.isAvailable()`
+- `RNNetworkBridge.getNativeAppConfig(): AppConfig | null`
+- `RNNetworkBridge.getNativeActiveDomain(): string | null`
+- `RNNetworkBridge.getNativeBaseURL(): string | null`
+- `RNNetworkBridge.setActiveDomain(key)`
+- `RNNetworkBridge.getBaseURLForDomain(key)`
+- `RNNetworkBridge.cancel(requestId)`
+- `RNNetworkBridge.onSessionExpired(handler)`
+- `RNNetworkBridge.request(requestId, url, method, headers, body)`
+
+En código normal preferir las funciones de top-level (`request`, `cancelRequest`, etc.) que añaden timeout y generación de `requestId`.
+
+## Helpers
+
+### `parseAppConfig(raw)`
+
+```typescript
+function parseAppConfig(raw: unknown): AppConfig | null
 ```
-Error: useAppConfig must be used inside AppConfigProvider
-```
+
+Valida estructura manualmente (sin Zod). Retorna `null` si el payload no cumple. Ya se aplica internamente en `RNNetworkBridge.getNativeAppConfig()`.
 
 ### `MockNetworkProvider`
 
 ```typescript
 class MockNetworkProvider implements NetworkProvider {
-  constructor(config: MockNetworkProviderConfig)
-  request(url, method, headers, body?): Promise<Record<string, unknown>>
+  constructor(config: { routes: Record<string, Record<string, unknown>> })
 }
 ```
 
-Implementación de `NetworkProvider` para desarrollo. Matchea URLs por substring; la ruta más larga gana. Lanza `{ code: 'UNKNOWN', retryable: false }` si no hay match.
-
-## Objeto utilitario
-
-### `RNNetworkBridge`
-
-```typescript
-const RNNetworkBridge: {
-  isAvailable(): boolean
-  getNativeAppConfig(): Record<string, unknown> | null
-  getNativeBaseURL(): string | null
-  setActiveDomain(key: string): Promise<void>
-  getBaseURLForDomain(key: string): string | null
-  request(url, method, headers, body?): Promise<Record<string, unknown>>
-}
-```
-
-Acceso de bajo nivel al módulo nativo. Útil para:
-
-- Inicializar `AppConfigProvider` con el config del nativo: `RNNetworkBridge.getNativeAppConfig()`.
-- Cambiar el dominio activo desde fuera del context: `RNNetworkBridge.setActiveDomain('staging')`.
-- Debug Android: `(RNNetworkBridge as any).debugIdentity?.()`.
-
-> Para uso cotidiano prefiere `request`, `useAppConfig`, etc. `RNNetworkBridge` es un escape hatch.
-
-## Tipos re-exportados
-
-```typescript
-export type {
-  NetworkErrorCode,
-  NetworkErrorPayload,
-  NetworkProvider,
-  HttpMethod,
-  MockNetworkProviderConfig,
-  AppConfig,
-  AppEnvironment,
-  CountryCode,
-  DomainConfig,
-  DomainKey,
-}
-```
-
-Definiciones detalladas en [Tipos](02-rn-network-tipos.md).
+Ver [02 · Uso básico — Mock](../02-integracion-app-rn/05-modo-desarrollo.md).

@@ -1,102 +1,53 @@
 # Config plugin
 
-`@scotia/rn-network` incluye un config plugin de Expo que se ejecuta automáticamente durante `npx expo prebuild`. Solo afecta a **iOS**.
+`@scotia/rn-network` incluye un config plugin de Expo que se ejecuta durante `npx expo prebuild`. **Solo afecta a iOS.**
 
-## Activación
+## Qué hace
+
+Agrega un `post_install` hook al Podfile que fuerza a `NetworkContracts` a compilarse como **dynamic framework** (`MACH_O_TYPE = mh_dylib`), aunque CocoaPods quisiera linkearlo estático.
+
+## Por qué es necesario
+
+Si `NetworkContracts` se linkea estático, el binary final de la app tiene **dos copias** del símbolo `RNNetworkRegistry` (una en el módulo Expo, otra en la app del banco). Cada copia mantiene su propio singleton → el host registra el provider en una instancia y el módulo Expo lee la otra → `isAvailable() === false` aunque registraste.
+
+Como dynamic framework, los símbolos viven en una única `.framework` cargada en runtime y el singleton es realmente compartido.
+
+## Cómo se aplica
 
 En `app.json`:
 
 ```json
 {
   "expo": {
-    "plugins": [
-      "@scotia/rn-network"
-    ]
+    "plugins": ["@scotia/rn-network"]
   }
 }
 ```
 
-No requiere opciones por ahora.
+Después correr `npx expo prebuild --clean`. El plugin modifica `ios/Podfile`.
 
-## Qué hace exactamente
+## Validación
 
-### 1. Añade sources al `Podfile`
-
-Inserta al inicio del archivo:
+En el Podfile generado deberías ver un bloque tipo:
 
 ```ruby
-source 'https://github.com/juanvegu/scotia-podspecs.git'
-source 'https://cdn.cocoapods.org/'
-```
-
-El primer source permite resolver el pod `NetworkContracts`. El segundo es el source estándar de CocoaPods (necesario porque al declarar un source custom, CocoaPods deja de buscar en el CDN público por defecto).
-
-### 2. Inyecta un `pre_install` hook
-
-Añade antes del primer `target ... do`:
-
-```ruby
-pre_install do |installer|
-  installer.pod_targets.each do |pod|
-    if pod.name == 'NetworkContracts'
-      def pod.build_type
-        Pod::BuildType.dynamic_framework
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    if target.name == 'NetworkContracts'
+      target.build_configurations.each do |config|
+        config.build_settings['MACH_O_TYPE'] = 'mh_dylib'
+        # … etc
       end
     end
   end
 end
 ```
 
-Esto fuerza que el pod `NetworkContracts` se compile como **dynamic framework** independientemente de la configuración global del Podfile (típicamente `use_frameworks! :linkage => :static`).
+Si lo borrás y volvés a `pod install`, el plugin lo regenera en el próximo `prebuild`.
 
-Razón: garantizar que `RNNetworkRegistry` exista como **una sola instancia** en runtime, compartida entre la app host y el módulo nativo de `rn-network`. Si quedara estático, habría dos copias del símbolo y la integración fallaría silenciosamente (ver [Decisiones técnicas §4](../01-arquitectura/04-decisiones-tecnicas.md)).
+## Troubleshooting
 
-### 3. Idempotencia
-
-El plugin verifica antes de inyectar:
-
-```typescript
-const sourcesAlreadyPresent =
-    podfile.includes('scotia-podspecs') &&
-    podfile.includes('cdn.cocoapods.org')
-
-const hookAlreadyPresent = podfile.includes("pod.name == 'NetworkContracts'")
-```
-
-Esto permite correr `npx expo prebuild` múltiples veces sin duplicar las inyecciones.
-
-## Cuándo se ejecuta
-
-| Comando | Ejecuta el plugin |
+| Síntoma | Causa |
 |---|---|
-| `npx expo prebuild` | Sí |
-| `npx expo prebuild --clean` | Sí (regenera `ios/` y `android/` desde cero) |
-| `npx expo run:ios` | Sí (corre prebuild si es necesario) |
-| `expo start` (Metro dev server) | No |
-| Build de Xcode después de prebuild | No (el Podfile ya está modificado) |
-
-## Verificar que se ejecutó correctamente
-
-Después de `npx expo prebuild`:
-
-```bash
-grep -n "scotia-podspecs\|NetworkContracts" ios/Podfile
-```
-
-Deberías ver las tres líneas relevantes (los dos `source` y el bloque `pre_install`).
-
-## Si no usas Expo prebuild
-
-Si tu app está en **bare workflow** sin Expo CLI gestionando los archivos nativos, el plugin no se ejecuta. En ese caso debes modificar manualmente el `ios/Podfile`:
-
-1. Añadir los dos `source` al inicio.
-2. Añadir el `pre_install` hook.
-3. Añadir `pod 'NetworkContracts', '~> 1.0'` al target relevante (si no lo estás obteniendo via el pod de `rn-network`).
-
-## Android: no hace nada
-
-El plugin no toca `android/`. La integración Android se resuelve completamente a través del módulo Expo y la dependencia Maven que declara el host (ver [Android — consumir contracts](../03-integracion-app-nativa/01-android-consumir-contracts.md)).
-
-## Siguiente paso
-
-[AppConfigProvider y dominios →](04-app-config-provider.md)
+| `isAvailable()` siempre false aunque registraste | NetworkContracts se linkeó estático. Verificar plugin en `app.json` y correr `prebuild --clean`. |
+| `duplicate symbols for ...RNNetworkRegistry...` al compilar iOS | Mismo problema, otra cara. Misma solución. |

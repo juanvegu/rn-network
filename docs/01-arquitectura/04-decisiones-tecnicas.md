@@ -1,144 +1,108 @@
 # Decisiones técnicas
 
-Las razones detrás de cada decisión de diseño no obvia.
+Por qué cada decisión no obvia. Lectura útil para tech leads que validan el diseño antes de migrarlo a Scotia.
 
-## 1. Por qué un puente nativo y no `fetch`
+## 1. El módulo Expo NO hace HTTP; delega al host nativo
 
-### Motivación
+**Decisión:** `request()` siempre termina en `provider.request()` del host (URLSession / OkHttp).
 
-Las apps del banco requieren:
+**Por qué:**
 
-- **SSL pinning**: validar que el certificado TLS del servidor coincida con un hash conocido (SPKI). Imposible con la API `fetch` estándar de RN.
-- **Reutilizar el stack de red del host**: cookies, sesión, headers comunes, telemetría, certificados ya configurados a nivel de OkHttp/URLSession.
-- **Visibilidad para auditorías**: las apps nativas tienen procesos de revisión de seguridad sobre su stack de red. Bypasearlo desde JS sería un retroceso.
+- El stack del banco ya tiene pinning, certificados, retry policies, telemetría, cookies de sesión. Reimplementarlo en JS sería absurdo y abriría una segunda superficie de auditoría.
+- El nativo conoce el contexto de sesión (token, refresh, device binding). Mantener todo eso en un solo lugar evita drift entre lo que ve el nativo y lo que ve la RN.
+- Apps web del banco no son comparables — corren en navegador con su propia política CSP/CORS.
 
-### Implicación
+**Costo:** la RN no puede correr sin un host (excepto vía mock JS para dev).
 
-Toda la lógica HTTP (incluido timeout, retry, pinning, manejo de errores de red) vive en el código nativo del host. La capa JS solo formatea la request y deserializa la respuesta.
+## 2. `NetworkResponse` envelope como retorno
 
-## 2. Por qué `rn-network-contracts` es un repo aparte
+**Decisión:** `request(...)` retorna `NetworkResponse(statusCode, headers, data?)`, no `Data` raw.
 
-`contracts` se mantiene separado de `rn-network` por tres motivos:
+**Por qué:**
 
-| Motivo | Detalle |
-|---|---|
-| Sin dependencias de RN/Expo | Una app nativa pura (Android/iOS) puede consumir solo `contracts` sin arrastrar Hermes, Metro, ni Expo. |
-| Versionado independiente | El host y el módulo RN pueden estar en ciclos de release distintos. Mientras el contrato núcleo no cambie, distintas versiones coexisten. |
-| Estabilidad como API | El contrato es Kotlin/Swift puro; cambia raramente. El módulo RN evoluciona más rápido (nuevos métodos JS, mejor mapping de errores, etc.). |
+- Permite que el módulo enforce "2xx = éxito, otro = error" **centralmente**. El host ya no puede olvidar tirar.
+- Expone metadata (`Retry-After`, `X-Trace-Id`) al JS sin necesitar otra ronda.
+- Modela 204/cuerpos vacíos limpio (`data: nil`), sin colapsar a `UNKNOWN`.
 
-## 3. Por qué el contrato núcleo nunca cambia
+**Alternativa descartada:** `Result<Data, NetworkError>` (sealed/enum). Romper `throws` rompe la propagación natural de `CancellationError` y obliga al host a envolver manualmente.
 
-El comentario en el código lo dice explícito:
+## 3. `throws` en lugar de Result
 
-```kotlin
-/**
- * Core contract — must never change between versions.
- * New capabilities are added as optional interfaces
- * that extend this core.
- */
-interface NetworkProvider {
-    suspend fun request(...): ByteArray
-}
-```
+**Decisión:** `request(...)` sigue siendo `async throws`.
 
-Razón: distintos países / equipos / apps pueden ir actualizando la versión del contracts en momentos distintos. Si el contrato núcleo cambiara, una app vieja dejaría de poder satisfacer a un módulo RN nuevo (o viceversa).
+**Por qué:**
 
-Para extender funcionalidad sin romper:
+- Swift/Kotlin idiomatic. Las cancelaciones de Task/coroutine fluyen como excepciones automáticamente.
+- `URLError`/`IOException` se propagan tal cual; el mapper las traduce sin que el host tenga que catchearlas.
+- `NetworkError` tipado del host es un error como cualquier otro — pasa por el mismo canal.
 
-```kotlin
-interface CancellableNetworkProvider : NetworkProvider {
-    fun cancel(requestId: String)
-}
-```
+## 4. `NetworkError` tipado vs error genérico
 
-El módulo RN detecta en runtime si el provider implementa la interfaz extra y degrada elegantemente si no.
+**Decisión:** `NetworkError(code, retryable, httpStatus?, message?, info?)` como excepción que el host tira.
 
-## 4. Por qué `NetworkContracts` debe ser dynamic framework en iOS
+**Por qué:**
 
-### Problema
+- El host sabe la semántica de sus errores (qué 401 es sesión vs cuál es credenciales). El mapper genérico nunca podría discriminarlo.
+- `info` permite anexar payloads estructurados (`{ retryAfter: 30 }` para rate-limit) sin contaminar `message`.
+- El JS recibe `code` tipado y ramifica con `switch` exhaustivo + escape hatch (`(string & {})`) para códigos host-específicos.
 
-La app RN típicamente usa `use_frameworks! :linkage => :static` para reducir size. Pero si `NetworkContracts` se compila como **static framework** y la app host lo carga también, terminan habiendo **dos copias** del símbolo `RNNetworkRegistry` en runtime — uno por cada binario. Cuando la app host escribe en uno, el módulo RN lee del otro, y la integración falla silenciosamente (`provider == nil`).
+## 5. `RNNetworkRegistry` singleton compartido
 
-### Solución
+**Decisión:** singleton global en `rn-network-contracts`, asignado por el host antes de iniciar RN.
 
-El config plugin `withNetworkContracts` inyecta en el Podfile:
+**Por qué:**
 
-```ruby
-pre_install do |installer|
-  installer.pod_targets.each do |pod|
-    if pod.name == 'NetworkContracts'
-      def pod.build_type
-        Pod::BuildType.dynamic_framework
-      end
-    end
-  end
-end
-```
+- El host tiene que registrar **antes** de que cualquier código RN se ejecute. Un singleton es la única forma de garantizar visibilidad sin pasar el provider por parámetros.
+- Compartido entre el binary del host y del módulo Expo porque ambos importan el mismo símbolo de `NetworkContracts`. Si el contrato estuviera en dos binarios distintos, habría dos registries y nada funcionaría.
 
-Esto fuerza que `NetworkContracts` se compile como **dynamic framework**, garantizando una única instancia compartida en runtime.
+**Riesgo:** "framework duplicado" en iOS si CocoaPods compila `NetworkContracts` como static — por eso el podspec fuerza `static_framework = false`.
 
-El podspec correspondiente ya está configurado coherentemente:
+## 6. `activeDomain` separado del `AppConfig`
 
-```ruby
-s.static_framework = false
-s.pod_target_xcconfig = {
-  'MACH_O_TYPE' => 'mh_dylib',
-  ...
-}
-```
+**Decisión:** `appConfig` describe los dominios disponibles; `activeDomain` está en el registry, mutable.
 
-## 5. Por qué Android no necesita el equivalente al `pre_install` hook
+**Por qué:**
 
-En Android la JVM tiene un único `ClassLoader` por proceso (excepto cuando se usan plugins isolados, que no es nuestro caso). Una clase con el mismo nombre cargada una sola vez ⇒ `RNNetworkRegistry` es realmente único.
+- Inmutabilidad: cambiar de dominio no debería reconstruir el config completo.
+- Modela bien que "qué dominios existen" es declarativo y rara vez cambia, mientras "cuál estoy usando" es estado runtime.
+- Permite que el JS cambie el active sin que el nativo regenere su config.
 
-El módulo Android expone una función `debugIdentity` que confirma esto:
+## 7. Fallback al mock JS basado en presencia del provider
 
-```kotlin
-Function("debugIdentity") {
-    "registryId=${System.identityHashCode(RNNetworkRegistry)} " +
-        "classloader=${RNNetworkRegistry::class.java.classLoader}"
-}
-```
+**Decisión:** si `RNNetworkRegistry.provider == nil`, el módulo cae al `MockNetworkProvider` JS registrado por la app. Sin `__DEV__`, sin flag de modo.
 
-Llamar `debugIdentity` desde JS y compararlo con un `Log.d` desde el host: si coinciden, el singleton es compartido.
+**Por qué:**
 
-## 6. Por qué el provider devuelve `ByteArray` / `Data` y no un objeto
+- La app nativa del banco puede arrancar en modo stubbed/mock (entorno de desarrollo, QA). Si la RN tuviera un gate `__DEV__` propio, no respetaría la decisión del host.
+- Regla binaria fácil de razonar: "hay provider → uso provider; no hay → uso mock JS si la app lo registró; sino, error `PROVIDER_NOT_SET`".
+- Los mocks viajan siempre en el bundle (no se excluyen) porque la app nativa puede arrancar en mock también en producción.
 
-El contrato núcleo:
+## 8. Cancel unificado en el contrato (sin `CancellableNetworkProvider`)
 
-```kotlin
-suspend fun request(...): ByteArray
-```
+**Decisión:** un solo `NetworkProvider` con `cancel(requestId)` opcional (default no-op).
 
-```swift
-func request(...) async throws -> Data
-```
+**Por qué:**
 
-Razones:
+- Evita la detección runtime de capability (`provider as? CancellableNetworkProvider`).
+- Implementaciones existentes conforman automáticamente (Swift `extension`, Kotlin `default method`).
+- Si el host no soporta cancel, el default no rompe nada y el JS sigue funcionando.
 
-- **Independencia de formato**: el provider no asume JSON. Cambiar a XML, MessagePack o binario solo requiere cambiar el código de parseo (que vive en el módulo RN, no en el provider).
-- **Performance**: evita parseo redundante. El provider devuelve los bytes, el módulo RN parsea una sola vez.
-- **Errores HTTP claros**: el provider puede inspeccionar los bytes antes de parsear para detectar payloads de error específicos.
+## 9. Timeout cliente en JS
 
-## 7. Por qué la API JS solo retorna `Record<string, unknown>`
+**Decisión:** `Promise.race(bridgeCall, setTimeout)` en el JS, con `cancelRequest(requestId)` best-effort al vencer.
 
-```typescript
-request(...): Promise<Record<string, unknown>>
-```
+**Por qué:**
 
-Limitación deliberada: la API actual asume que todas las respuestas son **JSON objects**. No soporta arrays raíz (`[...]`), texto plano, ni binario.
+- Defensa contra el caso real: el nativo no responde tras inactividad larga (app vuelve de background, sesión muerta, conexión congelada).
+- No depende de que el host implemente timeout — siempre hay un upper bound desde el JS.
+- Configurable per-call (`options.timeoutMs`) o global (`setRequestTimeout(ms)`).
 
-Razón histórica: el caso de uso dominante (APIs internas del banco) siempre responde con objetos. Si esto cambia, la API se puede extender con una variante `requestRaw()` o tipar el retorno como `unknown`.
+## 10. `getNativeActiveDomain` como función nativa propia (no dentro de `getNativeAppConfig`)
 
-## 8. Por qué `__DEV__` es parte del flujo
+**Decisión:** dos funciones nativas separadas: `getNativeAppConfig()` retorna solo el config; `getNativeActiveDomain()` retorna el string.
 
-El código verifica explícitamente `__DEV__` antes de delegar al mock:
+**Por qué:**
 
-```typescript
-const mock = registry.jsProvider
-if (__DEV__ && mock) {
-  return mock.request(...)
-}
-```
-
-Razón: previene que un `MockNetworkProvider` registrado accidentalmente en código de producción (por un error de bundling, por ejemplo) responda con datos hardcodeados en lugar de fallar visiblemente con `PROVIDER_NOT_SET`. En release builds, `__DEV__` es `false` y el mock se ignora.
+- Coherente con la separación en el registry.
+- Permite al JS leer cada uno cuando lo necesite, sin forzar un objeto compuesto.
+- El `parseAppConfig` no tiene que validar un campo opcional `activeDomain` que en realidad pertenece a otro lugar.

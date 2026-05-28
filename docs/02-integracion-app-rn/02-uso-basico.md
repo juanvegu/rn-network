@@ -5,113 +5,124 @@
 ```typescript
 import { request } from '@scotia/rn-network'
 
-async function fetchUser() {
-  try {
-    const data = await request('/api/users/me')
-    console.log(data) // Record<string, unknown>
-  } catch (error) {
-    // error es de tipo NetworkErrorPayload
-    console.error(error)
+const res = await request('/v1/brands', 'GET')
+console.log(res.body)         // parsed JSON
+console.log(res.statusCode)   // 200
+console.log(res.headers)      // { ... }
+```
+
+`request<T>()` retorna `Promise<NetworkResponse<T>>` con:
+
+- `body: T` — JSON parseado (`{}` para 204/cuerpo vacío)
+- `statusCode: number`
+- `headers: Record<string, string>`
+
+## Tipado del body
+
+```typescript
+interface Brand { id: string; description: string }
+interface BrandsResponse { brands: Brand[]; years: { id: string; description: string }[] }
+
+const res = await request<BrandsResponse>('/v1/brands', 'GET')
+res.body.brands.forEach(b => console.log(b.description))
+```
+
+## Métodos, headers y body
+
+```typescript
+const res = await request<{ id: string }>(
+  '/v1/quote',
+  'POST',
+  { 'X-Client': 'mobile' },
+  { vehicleId: '123', condition: 'new' }
+)
+```
+
+Métodos soportados: `'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'`.
+
+## Manejo de errores
+
+Todos los errores rechazan con `NetworkErrorPayload`:
+
+```typescript
+interface NetworkErrorPayload {
+  code: string         // ver tabla de códigos estándar
+  retryable: boolean
+  httpStatus?: number
+  message?: string
+  info?: Record<string, unknown>
+}
+```
+
+Patrón recomendado:
+
+```typescript
+try {
+  const res = await request('/v1/brands')
+} catch (e) {
+  const err = e as NetworkErrorPayload
+  switch (err.code) {
+    case 'SESSION_EXPIRED':
+      router.replace('/login')
+      break
+    case 'NO_CONNECTIVITY':
+    case 'TIMEOUT':
+      toast.show('Sin conexión. Reintentá.', { retryable: err.retryable })
+      break
+    case 'HTTP_CLIENT_ERROR':
+      toast.show(`Error del cliente (${err.httpStatus})`)
+      break
+    case 'HTTP_SERVER_ERROR':
+      toast.show('El servidor falló. Reintentá en unos minutos.')
+      break
+    default:
+      logger.error('unhandled network error', err)
   }
 }
 ```
 
-`request()` por defecto hace `GET`. Para otros métodos:
+Ver [04 · Códigos de error](../04-referencia-api/05-manejo-de-errores.md) para la lista completa.
+
+## Timeout
+
+Por defecto cada request tiene 30 s de timeout cliente. Si el nativo no responde, JS lanza `TIMEOUT` y best-effort cancela el request real.
 
 ```typescript
-await request('/api/users', 'POST', { 'Content-Type': 'application/json' }, { name: 'Ana' })
-await request('/api/users/42', 'PUT', {}, { name: 'Ana B.' })
-await request('/api/users/42', 'DELETE')
+import { setRequestTimeout, request } from '@scotia/rn-network'
+
+setRequestTimeout(15_000)              // global, en ms
+setRequestTimeout(0)                   // desactiva el timeout cliente
+
+// override per-call:
+await request('/slow', 'GET', {}, undefined, { timeoutMs: 5_000 })
 ```
 
-## Firma completa
+## Cancelación
+
+Pasar un `requestId` permite cancelar manualmente:
 
 ```typescript
-function request(
-  url: string,
-  method: HttpMethod = 'GET',
-  headers: Record<string, string> = {},
-  body?: Record<string, unknown>
-): Promise<Record<string, unknown>>
+import { request, cancelRequest } from '@scotia/rn-network'
+
+const id = 'fetch-brands'
+request('/v1/brands', 'GET', {}, undefined, { requestId: id })
+  .catch(e => console.log(e.code))    // 'CANCELLED' si se canceló
+
+// más tarde:
+await cancelRequest(id)
 ```
 
-- `url` — relativo (se prepende el `baseURL` activo) o absoluto (`http(s)://...`).
-- `method` — `'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'`.
-- `headers` — diccionario plano de strings.
-- `body` — diccionario JSON-serializable, opcional.
+Si el host no implementa `cancel()`, `cancelRequest` es no-op pero no rompe.
 
-Retorna un `Record<string, unknown>` (la respuesta JSON parseada). **Solo se soportan respuestas JSON con un objeto raíz** — arrays raíz, texto plano o binario no son válidos.
+## Sesión expirada
 
-## Verificar si el bridge nativo está disponible
+Suscribirse al evento push para reaccionar inmediatamente cuando el host detecta sesión perdida (no espera al próximo request fallido):
 
 ```typescript
-import { isAvailable } from '@scotia/rn-network'
+import { onSessionExpired } from '@scotia/rn-network'
 
-if (isAvailable()) {
-  // La app nativa host registró su provider — las requests van al stack nativo
-} else {
-  // Estamos en desarrollo sin host, o el host no registró todavía
-}
+useEffect(() => onSessionExpired(() => {
+  Alert.alert('Sesión expirada', 'Volvé a iniciar sesión')
+  router.replace('/login')
+}), [])
 ```
-
-`isAvailable()` retorna `true` solo si el módulo nativo está linkeado **y** el host ya hizo `RNNetworkRegistry.provider = ...`. Útil para decidir si caer a un mock JS.
-
-## Configurar la baseURL en JS
-
-Cuando no hay host nativo (típicamente en `expo start`), puedes setear un `baseURL` manual:
-
-```typescript
-import { setBaseURL, getBaseURL } from '@scotia/rn-network'
-
-setBaseURL('http://localhost:8080')
-console.log(getBaseURL()) // 'http://localhost:8080'
-```
-
-`setBaseURL` recorta el `/` final si lo trae. En modo nativo este valor se ignora (gana el `baseURL` derivado de `appConfig.activeDomain` del host).
-
-## Manejo de errores
-
-Todos los errores son rechazos con forma `NetworkErrorPayload`:
-
-```typescript
-import type { NetworkErrorPayload } from '@scotia/rn-network'
-
-try {
-  await request('/api/x')
-} catch (e) {
-  const err = e as NetworkErrorPayload
-  console.log(err.code)         // 'SSL_PINNING_FAILED' | 'TIMEOUT' | ...
-  console.log(err.retryable)    // boolean
-  console.log(err.httpStatus)   // number | undefined
-}
-```
-
-Ver [Manejo de errores](../04-referencia-api/05-manejo-de-errores.md) para la tabla completa de códigos.
-
-## Patrón de servicio típico
-
-```typescript
-// src/services/users.ts
-import { request } from '@scotia/rn-network'
-
-export interface User {
-  id: number
-  name: string
-}
-
-export async function getCurrentUser(): Promise<User> {
-  const data = await request('/api/users/me')
-  return data as unknown as User
-}
-
-export async function updateUser(id: number, patch: Partial<User>): Promise<User> {
-  const data = await request(`/api/users/${id}`, 'PATCH', {}, patch)
-  return data as unknown as User
-}
-```
-
-La conversión `as unknown as User` es manual porque la API retorna `Record<string, unknown>`. Si necesitas validación runtime, integra una librería como Zod o Valibot en la capa de servicios.
-
-## Siguiente paso
-
-[Config plugin →](03-config-plugin.md)

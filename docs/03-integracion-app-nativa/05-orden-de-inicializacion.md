@@ -1,156 +1,66 @@
 # Orden de inicialización
 
-> **Regla crítica:** registra `RNNetworkRegistry.provider` y `RNNetworkRegistry.appConfig` **antes** de inicializar el runtime de React Native.
+> **Regla crítica:** asigná los campos de `RNNetworkRegistry` **antes** de inicializar el runtime de React Native. Si el orden se invierte, el módulo Expo va a leer `provider == nil` y caer al mock JS aunque hayas registrado un provider real.
 
-Este es el error que rompe la mayoría de integraciones nuevas, así que tiene página dedicada.
+## Secuencia correcta
+
+```
+1. App nativa arranca
+2. AppDelegate / MainApplication setea:
+   - RNNetworkRegistry.appConfig
+   - RNNetworkRegistry.activeDomain
+   - RNNetworkRegistry.provider          (opcional)
+   - RNNetworkRegistry.onSessionExpired  (opcional)
+3. Init del React Native host
+4. RN levanta, ejecuta initNetworkConfig()
+5. AppConfigProvider lee getNativeAppConfig() + getNativeActiveDomain()
+6. JS hace su primer request() → llega al provider nativo
+```
 
 ## Por qué importa
 
-El módulo nativo de `@scotia/rn-network` lee `RNNetworkRegistry.provider` en el momento en que:
+El módulo Expo evalúa `isAvailable()` en cada `request()`. Internamente eso es:
 
-1. JS llama `isAvailable()` — lee `provider != null`.
-2. JS llama `request(...)` — lee `provider` y la llama.
-
-Si el RN runtime inicializa antes de que el provider esté seteado:
-
-- Algunos códigos JS que corren temprano (ej. `setProvider` condicional, lectura de `appConfig` en un context provider) pueden ejecutarse con `provider == null`.
-- El primer `request()` lanza `PROVIDER_NOT_SET`.
-- Aun si después seteas el provider, el código JS ya cacheó el resultado de `isAvailable()` en algunas pantallas y no se entera.
-
-## El orden correcto
-
-### Android
-
-```kotlin
-class MainApplication : Application() {
-    override fun onCreate() {
-        super.onCreate()
-
-        // 1) Registrar contracts
-        RNNetworkRegistry.provider = AppNetworkProvider()
-        RNNetworkRegistry.appConfig = mapOf(...)
-
-        // 2) Inicializar React Native
-        ReactNativeHostManager.initialize(this)
-        // o el equivalente que use tu integración (RnLauncher.initialize(), SoLoader.init(), ...)
-    }
-}
+```swift
+return RNNetworkRegistry.provider != nil
 ```
+
+Si en el paso 4 ya hay código JS preguntando "¿hay provider?" y el host todavía no lo asignó, la respuesta es `false`. El JS entonces cae al `MockNetworkProvider` o tira `PROVIDER_NOT_SET`. No hay reintento — el módulo no "espera" a que el host se decida.
+
+## Patrón para garantizar el orden
 
 ### iOS
 
-```swift
-@UIApplicationMain
-class AppDelegate: UIResponder, UIApplicationDelegate {
-    func application(_ app: UIApplication, didFinishLaunchingWithOptions _: [...]?) -> Bool {
-        // 1) Registrar contracts
-        RNNetworkRegistry.provider = AppNetworkProvider()
-        RNNetworkRegistry.appConfig = [...]
-
-        // 2) Inicializar React Native
-        // ReactNativeHostManager.shared.initialize()
-
-        return true
-    }
-}
-```
-
-## El orden incorrecto (qué NO hacer)
-
-```kotlin
-// ❌ MAL
-override fun onCreate() {
-    super.onCreate()
-    ReactNativeHostManager.initialize(this)         // RN arranca primero
-    RNNetworkRegistry.provider = AppNetworkProvider() // demasiado tarde
-}
-```
+`AppDelegate.application(_:didFinishLaunchingWithOptions:)` corre **antes** del primer JS. Setear todo ahí es seguro.
 
 ```swift
-// ❌ MAL
-func application(...) -> Bool {
-    ReactNativeHostManager.shared.initialize()
-    RNNetworkRegistry.provider = AppNetworkProvider()
+func application(_ application: UIApplication, didFinishLaunchingWithOptions ...) -> Bool {
+    setupNetworkRegistry()    // 1
+    setupReactNative()        // 2
     return true
 }
 ```
 
-## Por qué `setProvider` no soluciona esto
-
-`setProvider` del lado JS guarda un `MockNetworkProvider` para usar **solo en `__DEV__`**. En release builds no se considera.
-
-```typescript
-// src/index.ts
-const mock = registry.jsProvider
-if (__DEV__ && mock) {
-  return mock.request(...)
-}
-throw { code: 'PROVIDER_NOT_SET', retryable: false }
-```
-
-Por lo tanto: en producción, registrar el provider del lado **nativo** antes de RN es la única opción.
-
-## Caso especial: registrar dinámicamente
-
-Si por alguna razón no puedes registrar en `onCreate` / `application(_:didFinishLaunchingWithOptions:)` (ej. necesitas un valor de configuración que se carga de forma asíncrona), tienes dos opciones:
-
-1. **Bloquear la inicialización de RN**: cargar el config primero, luego setear el provider, luego inicializar RN. El usuario ve un splash más largo, pero la integración es consistente.
-2. **Registrar después y manejar el primer error en JS**: hacer que la app RN tolere `PROVIDER_NOT_SET` para los primeros requests y reintente. Más complejo, no recomendado.
-
-## Cómo verificar el orden
-
 ### Android
 
-Añade un log explícito en `onCreate`:
-
-```kotlin
-RNNetworkRegistry.provider = AppNetworkProvider()
-Log.d("Net", "[BEFORE_RN] provider set, registryId=${System.identityHashCode(RNNetworkRegistry)}")
-ReactNativeHostManager.initialize(this)
-Log.d("Net", "[AFTER_RN] RN initialized")
-```
-
-Debería verse en logcat:
-
-```
-Net: [BEFORE_RN] provider set, registryId=12345678
-Net: [AFTER_RN] RN initialized
-```
-
-Y desde JS, al cargar la primera pantalla:
-
-```typescript
-import { isAvailable } from '@scotia/rn-network'
-console.log('isAvailable:', isAvailable()) // debe ser true
-```
-
-### iOS
-
-Análogo con `print` o `os_log`.
-
-## Pitfall sutil: registrar en lazy init
-
-Cuando se asigna a un singleton de Kotlin/Swift, los efectos secundarios solo ocurren si la propiedad se evalúa. Asegúrate de que el código que registra el provider no esté detrás de un `lazy { }` o `by lazy` que nunca se llame antes de que RN inicie.
-
-```kotlin
-// ❌ Si nadie llama a NetworkBootstrap antes de RN, el provider queda null
-object NetworkBootstrap {
-    init {
-        RNNetworkRegistry.provider = AppNetworkProvider()
-    }
-}
-```
-
-Solución: invocarlo explícitamente desde `Application.onCreate()`:
+`MainApplication.onCreate()` corre **antes** del primer `Activity` y antes del init de RN. Setear todo ahí es seguro.
 
 ```kotlin
 override fun onCreate() {
     super.onCreate()
-    NetworkBootstrap // fuerza la evaluación del init
-    ReactNativeHostManager.initialize(this)
+    setupNetworkRegistry()    // 1
+    setupReactNative()        // 2
 }
 ```
 
-## Siguiente paso
+## Cuándo NO setear `provider`
 
-[Publicación de artefactos →](06-publicacion-de-artefactos.md)
+Si querés que la app RN use el `MockNetworkProvider` JS (por ejemplo en una build con backend stubbed), **no** asignes `RNNetworkRegistry.provider`. Igual seteá `appConfig` y `activeDomain` (la app RN los lee para mostrar el environment correctamente).
+
+```swift
+RNNetworkRegistry.appConfig    = AppConfig(...)
+RNNetworkRegistry.activeDomain = "MOCK"
+// RNNetworkRegistry.provider = nil  ← intencional
+```
+
+La app RN detectará `isAvailable() === false` y usará su `MockNetworkProvider` con fixtures locales.

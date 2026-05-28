@@ -1,105 +1,74 @@
-# Android — Consumir `rn-network-contracts`
+# Android · Consumir `rn-network-contracts`
 
-Cómo añadir la dependencia Maven a una app nativa Android.
+## Distribución
 
-## 1. Habilitar el repo de JitPack
+`rn-network-contracts` se publica como AAR en el **Maven interno de Scotia**. Coordenadas:
 
-`contracts` se publica vía JitPack a partir de tags de GitHub. Añade JitPack como repositorio en `settings.gradle.kts`:
+```
+cl.scotiabank.rnnetwork:contracts:1.1.0
+```
+
+> En el repo legacy estaba como `com.github.juanvegu:rn-network-contracts:1.0.8` en JitPack. La migración a Scotia cambió las coordenadas y el registro.
+
+## 1. Habilitar el repo Maven interno
 
 ```kotlin
+// settings.gradle.kts
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://jitpack.io") }
+        maven {
+            url = uri("https://nexus.scotiabank.cl/repository/maven-releases/")
+            credentials {
+                username = providers.gradleProperty("scotiaNexusUser").get()
+                password = providers.gradleProperty("scotiaNexusPass").get()
+            }
+        }
     }
 }
 ```
 
-Si tu proyecto usa el `settings.gradle` antiguo (Groovy):
+Las credenciales viven en `~/.gradle/gradle.properties` (devs) o en variables de entorno (CI).
 
-```groovy
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' }
-    }
-}
-```
+## 2. Declarar la dependencia en el host y el expo-module
 
-## 2. Declarar la dependencia
-
-En el `build.gradle.kts` del módulo `app`:
+Ambos lados deben referenciar la **misma versión**:
 
 ```kotlin
+// scotia-android-native/app/build.gradle.kts
 dependencies {
-    implementation("com.github.juanvegu:rn-network-contracts:1.0.8")
-
-    // Dependencias típicas para implementar el provider:
+    implementation("cl.scotiabank.rnnetwork:contracts:1.1.0")
+    // OkHttp y kotlinx-coroutines también, si el provider los usa.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
 ```
 
-| Coordenada | Valor |
-|---|---|
-| Group | `com.github.juanvegu` |
-| Artifact | `rn-network-contracts` |
-| Version | `1.0.8` (versión actual; consultar [Versionado](../01-arquitectura/05-versionado-y-compatibilidad.md)) |
-
-## 3. La misma versión en ambos lados
-
-Si tu app va a embeber un AAR de la app RN (escenario brownfield), **el AAR también consume `rn-network-contracts`**. Ambos deben resolver a la **misma versión** para que el `RNNetworkRegistry` sea un singleton compartido.
-
-Ejemplo conflicto típico:
-
-| Componente | Versión declarada |
-|---|---|
-| `scotia-android-native/app/build.gradle.kts` | `1.0.8` |
-| AAR de `rn-network` (interno) | `1.0.7` |
-
-Gradle resolverá a `1.0.8` (la más nueva), pero si algo cambió entre `1.0.7` y `1.0.8` podrías ver `NoSuchMethodError` en runtime.
-
-**Recomendación**: declarar la versión explícitamente en ambos sitios y bumpearla simultáneamente.
-
-## 4. Verificar la resolución
-
-```bash
-./gradlew :app:dependencyInsight --dependency rn-network-contracts
+```groovy
+// rn-network/android/build.gradle (interno al expo-module, ya está)
+dependencies {
+    implementation 'cl.scotiabank.rnnetwork:contracts:1.1.0'
+}
 ```
 
-Debe mostrar **una sola** entrada de `com.github.juanvegu:rn-network-contracts:<version>`. Si aparecen varias, hay conflicto.
+Pinear a versión exacta (no rango). Una sola versión en el APK garantiza un solo `RNNetworkRegistry`.
 
-## 5. Importar las clases
+## 3. Verificar identidad del singleton
 
-En tu código Kotlin:
+En la JVM hay un único `ClassLoader` por proceso, así que el singleton es siempre compartido si el classpath está limpio. Para verificarlo en runtime:
 
 ```kotlin
-import com.scotia.rnnetwork.contracts.NetworkProvider
-import com.scotia.rnnetwork.contracts.RNNetworkRegistry
-import com.scotia.rnnetwork.contracts.CancellableNetworkProvider  // opcional
+Log.d("Net", "host=${System.identityHashCode(RNNetworkRegistry)} cl=${RNNetworkRegistry::class.java.classLoader}")
 ```
 
-Si IntelliJ/Android Studio no las encuentra, sincroniza Gradle y verifica que JitPack haya construido el tag:
-
-```
-https://jitpack.io/com/github/juanvegu/rn-network-contracts/<version>/
-```
-
-Si JitPack todavía no compiló el tag (puede tardar unos minutos la primera vez), navega a esa URL — JitPack lo construye on-demand.
+Y en el módulo Expo está expuesto `RnNetworkModule.debugIdentity()`. Los dos valores deben coincidir.
 
 ## Troubleshooting
 
-| Síntoma | Causa probable | Solución |
+| Síntoma | Causa | Solución |
 |---|---|---|
-| `Could not resolve com.github.juanvegu:rn-network-contracts:X` | Falta el repo JitPack | Añadir `maven { url = uri("https://jitpack.io") }` |
-| `Could not find ... rn-network-contracts:X` | El tag no existe / aún no se compiló | Verificar el tag en GitHub y forzar build navegando a `https://jitpack.io/com/github/juanvegu/rn-network-contracts/X/` |
-| `Type com.scotia.rnnetwork.contracts.RNNetworkRegistry is defined multiple times` | Contracts entró por dos rutas (ej. composite build + Maven) | Unificar a una sola fuente |
-| Versiones distintas entre host y AAR | Falta de pin explícito | Declarar la misma versión en ambos lados |
-
-## Siguiente paso
-
-[Android — registrar provider →](02-android-registrar-provider.md)
+| `Could not resolve cl.scotiabank.rnnetwork:contracts:1.1.0` | Repo Maven no agregado / credenciales mal | Verificar `settings.gradle.kts` y `gradle.properties` |
+| `Type ... RNNetworkRegistry is defined multiple times` | Contract entró por dos rutas | Unificar a una sola fuente del Maven |
+| `provider == null` aunque registraste | Orden: registraste después del init de RN | Ver [orden de inicialización](05-orden-de-inicializacion.md) |

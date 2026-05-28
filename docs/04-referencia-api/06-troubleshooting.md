@@ -1,184 +1,137 @@
 # Troubleshooting
 
-Catálogo de problemas comunes y cómo diagnosticarlos.
+Catálogo de problemas comunes con diagnóstico.
 
-## Síntomas en runtime
+## `isAvailable() === false` aunque el host registró el provider
 
-### `request()` lanza `PROVIDER_NOT_SET`
+### Causa A — iOS: `NetworkContracts` se linkeó estático
 
-**Causas posibles:**
+Síntoma: el módulo Expo y el host tienen dos copias del singleton.
 
-1. La app nativa host no ejecutó `RNNetworkRegistry.provider = ...` antes de inicializar RN. Ver [Orden de inicialización](../03-integracion-app-nativa/05-orden-de-inicializacion.md).
-2. La app no está embebida en un host nativo (ej. estás corriendo `expo start` sin hosts), no estás en `__DEV__`, y no llamaste a `setProvider()`. En desarrollo, usar `MockNetworkProvider` o un provider JS custom. Ver [Modo desarrollo](../02-integracion-app-rn/05-modo-desarrollo.md).
-3. (iOS) `NetworkContracts` quedó como static framework y el símbolo `RNNetworkRegistry` está duplicado — la app host escribió en una instancia y el módulo RN lee de la otra. Aplicar el `pre_install` hook (debería hacerlo el config plugin automáticamente).
-4. (Android) `RNNetworkRegistry` se cargó con dos `ClassLoader` distintos (raro, solo en escenarios con plugins/feature delivery). Verificar con `debugIdentity` desde JS y `System.identityHashCode(RNNetworkRegistry)` desde el host.
+Diagnóstico:
 
-### `isAvailable()` retorna `false` en producción
-
-Mismas causas que `PROVIDER_NOT_SET`. Verificar:
-
-- (Android) Logs del host en `onCreate`: ¿se ejecutó el código de registro?
-- (iOS) Breakpoint en `AppDelegate.application(_:didFinishLaunchingWithOptions:)`: ¿se llegó a la línea de registro?
-- ¿La línea de `RNNetworkRegistry.provider = ...` está **antes** de la inicialización de RN?
-
-### Las requests funcionan en debug pero fallan en release
-
-**Android — posibles causas:**
-
-1. ProGuard/R8 eliminó símbolos de `contracts`. Añadir:
-   ```proguard
-   -keep class com.scotia.rnnetwork.contracts.** { *; }
-   ```
-2. Resolution distinta de Gradle entre `debug` y `release` (raro pero posible). Verificar con `./gradlew :app:dependencyInsight --dependency rn-network-contracts --configuration releaseRuntimeClasspath`.
-
-**iOS — posibles causas:**
-
-1. App Transport Security bloquea HTTP en release (en debug, `NSAllowsArbitraryLoads = true` lo permite). Verificar que todos los `baseURL` en `appConfig.domains` sean HTTPS.
-2. Pinning configurado solo para un host específico que no es el de producción.
-
-### `SSL_PINNING_FAILED` solo en algunos entornos
-
-- El pin solo cubre un dominio. Añadir todos los dominios que el `activeDomain` pueda alcanzar al `CertificatePinner` (Android) o al `pinnedSPKIs` (iOS).
-- El certificado rotó. Recalcular el SPKI:
-  ```bash
-  openssl s_client -connect api.bank.cl:443 -servername api.bank.cl | \
-    openssl x509 -pubkey -noout | \
-    openssl pkey -pubin -outform DER | \
-    openssl dgst -sha256 -binary | \
-    openssl base64
-  ```
-
-### `UNKNOWN` con respuestas que parecen JSON válido
-
-Probablemente la respuesta es un **array** raíz (`[...]`) o un primitivo (`"texto"`, `42`). El módulo nativo solo acepta **objetos** raíz (`{...}`). Si el endpoint devuelve un array, envolverlo en el servidor:
-
-```json
-{ "items": [ ... ] }
+```swift
+print("registry:", ObjectIdentifier(RNNetworkRegistry.self))
 ```
 
-O, si no puedes cambiar el servidor, escribir un provider JS custom que adapte la respuesta.
+Si el `ObjectIdentifier` desde el host y desde el módulo Expo difieren, hay duplicación.
 
-## Síntomas en build / compilación
+Solución:
 
-### Android: `Could not resolve com.github.juanvegu:rn-network-contracts:X`
+1. Verificar que el plugin Expo está en `app.json`: `"plugins": ["@scotia/rn-network"]`.
+2. Correr `npx expo prebuild --clean`.
+3. Verificar en el Podfile generado que el `post_install` setea `MACH_O_TYPE = mh_dylib` para `NetworkContracts`.
 
-1. Falta el repo JitPack en `settings.gradle(.kts)`:
-   ```kotlin
-   maven { url = uri("https://jitpack.io") }
-   ```
-2. El tag `X` no existe en GitHub o no está construido. Navegar a `https://jitpack.io/com/github/juanvegu/rn-network-contracts/X/` — JitPack lo construye on-demand, revisar el log si falla.
-3. (Raro) El proxy corporativo bloquea JitPack. Configurar credenciales o mirror.
+### Causa B — Android: distinto `ClassLoader`
 
-### Android: `Type ... is defined multiple times`
+Síntoma: dos artefactos diferentes del contrato en el classpath.
 
-`rn-network-contracts` entró por dos rutas distintas (típicamente composite build + Maven, o dos versiones distintas). Unificar:
-
-```bash
-./gradlew :app:dependencyInsight --dependency rn-network-contracts
-```
-
-Debe mostrar una sola entrada. Si muestra dos, identificar el origen y forzar una sola versión:
+Diagnóstico:
 
 ```kotlin
-configurations.all {
-    resolutionStrategy.force("com.github.juanvegu:rn-network-contracts:1.0.8")
-}
+Log.d("Net", "host=${System.identityHashCode(RNNetworkRegistry)} cl=${RNNetworkRegistry::class.java.classLoader}")
+// y desde JS:
+RnNetworkModule.debugIdentity()
 ```
 
-### iOS: `Unable to find a specification for 'NetworkContracts'`
+Los IDs deben coincidir.
 
-Falta el source de `scotia-podspecs` en el Podfile. Añadir al inicio:
+Solución: unificar la fuente del AAR a una sola coordenada Maven. No mezclar JitPack con Maven interno ni con composite build.
 
-```ruby
-source 'https://github.com/juanvegu/scotia-podspecs.git'
-source 'https://cdn.cocoapods.org/'
-```
+### Causa C — Orden de inicialización
 
-Si después de añadirlo sigue fallando: `pod repo update`, luego `pod install`.
+Síntoma: el código JS pregunta `isAvailable()` antes de que el host haya seteado `provider`.
 
-### iOS: `pod install` exitoso pero `No such module 'NetworkContracts'` en código
+Solución: setear `RNNetworkRegistry.provider` **antes** de inicializar React Native. Ver [orden de inicialización](../03-integracion-app-nativa/05-orden-de-inicializacion.md).
 
-1. Abrir el `.xcworkspace`, no el `.xcodeproj`.
-2. Verificar que el target consumidor tenga `NetworkContracts` en Build Phases → Link Binary With Libraries.
-3. Limpiar build folder (`Cmd+Shift+K`) y derivar datos.
+## `PROVIDER_NOT_SET` desde `request()`
 
-### iOS: Linker error `duplicate symbol _$s16NetworkContracts...`
+Sin host nativo y sin `setProvider` JS.
 
-`NetworkContracts` quedó enlazado estáticamente dos veces. Aplicar el `pre_install` hook que fuerza dynamic framework:
+Solución: en dev, agregar `setProvider(new MockNetworkProvider({routes: ...}))` en `networkConfig.ts`. En prod, asegurar que el host registra antes de inicializar RN.
 
-```ruby
-pre_install do |installer|
-  installer.pod_targets.each do |pod|
-    if pod.name == 'NetworkContracts'
-      def pod.build_type
-        Pod::BuildType.dynamic_framework
-      end
-    end
-  end
-end
-```
+## `TIMEOUT` reiteradamente en endpoints específicos
 
-Después: `cd ios && pod deintegrate && pod install`.
+### Causa A — Timeout cliente muy bajo
 
-## Síntomas en TypeScript
-
-### `Module '@scotia/rn-network' has no exported member ...`
-
-1. Limpiar `node_modules` y reinstalar:
-   ```bash
-   rm -rf node_modules && npm install
-   ```
-2. Verificar que el `package.json` resuelva a un commit que tenga el export que buscas:
-   ```bash
-   cat node_modules/@scotia/rn-network/build/index.d.ts
-   ```
-3. Si pegaste un tag específico que no incluye el feature, bump a una versión más nueva.
-
-### El editor no resuelve los tipos pero compila
-
-Probablemente el editor está cacheando una versión vieja del index. Reiniciar el server de TypeScript (en VS Code: `Cmd+Shift+P → Restart TS Server`).
-
-## Diagnóstico de identidad del singleton
-
-### Android
+El default es 30 s. Si tu endpoint legítimamente tarda más:
 
 ```typescript
-// JS
-import { RNNetworkBridge } from '@scotia/rn-network'
-console.log((RNNetworkBridge as any).debugIdentity?.())
-// "registryId=12345678 classloader=..."
+await request('/slow', 'GET', {}, undefined, { timeoutMs: 60_000 })
 ```
 
-```kotlin
-// Host
-Log.d("Net", "host id=${System.identityHashCode(RNNetworkRegistry)} cl=${RNNetworkRegistry::class.java.classLoader}")
+### Causa B — El host nativo no implementó timeout
+
+Si el nativo no devuelve nunca, el cliente eventualmente dispara `TIMEOUT`. Verificar que el `URLSession`/`OkHttpClient` del host tenga timeouts configurados (típico 30 s).
+
+## `SSL_PINNING_FAILED`
+
+Cert rotado o pin mal calculado.
+
+Recalcular:
+
+```bash
+openssl x509 -in cert.pem -pubkey -noout | \
+  openssl pkey -pubin -outform DER | \
+  openssl dgst -sha256 -binary | \
+  openssl base64
 ```
 
-`registryId` y `classloader` deben coincidir.
+## `INVALID_RESPONSE_BODY`
 
-### iOS
+2xx pero body no es JSON. Causas comunes:
 
-No hay `debugIdentity` expuesto. Validación indirecta:
+- El BFF devuelve XML/HTML en éxito por error de routing.
+- Encoding distinto a UTF-8.
+- Response trailer corrupto (rare).
 
-1. Desde el host, asignar `RNNetworkRegistry.provider` y loggear:
-   ```swift
-   print("host: provider set:", RNNetworkRegistry.provider != nil)
-   ```
-2. Desde JS, después de RN init:
-   ```typescript
-   console.log('JS isAvailable:', isAvailable())
-   ```
+Diagnóstico: capturar el response en el provider antes de retornar:
 
-Si el host dice `true` y JS dice `false`, el framework está duplicado (típicamente `NetworkContracts` quedó estático).
+```swift
+print("body:", String(data: data, encoding: .utf8) ?? "<non-utf8>")
+```
 
-## Cuándo escalar
+## El evento `sessionExpired` nunca llega al JS
 
-Si después de los pasos anteriores el problema persiste:
+- ¿El host está invocando `RNNetworkRegistry.onSessionExpired?()` cuando detecta la expiración?
+- ¿El JS está suscripto **antes** de que se dispare el evento? Si la app no termina de montar antes del evento, el handler se pierde.
 
-1. Capturar:
-   - Versión exacta de `@scotia/rn-network` (`npm ls @scotia/rn-network`).
-   - Versión de `rn-network-contracts` resuelta en Android (`./gradlew dependencyInsight`) e iOS (`Podfile.lock`).
-   - Snippet del código de registro del host.
-   - `debugIdentity` desde JS si es Android.
-   - Logs de la inicialización (`onCreate` / `AppDelegate`).
-2. Abrir issue en `https://github.com/juanvegu/scotia-rn-network/issues` o `https://github.com/juanvegu/rn-network-contracts/issues` según corresponda.
+Patrón seguro:
+
+```typescript
+useEffect(() => onSessionExpired(handler), [])  // en _layout.tsx, lo más arriba posible
+```
+
+## `setActiveDomain` no cambia el `baseURL`
+
+- ¿La `key` que pasaste existe en `config.domains`? Si no, `setActiveDomain` es no-op.
+- ¿Estás leyendo `getBaseURL()` después del cambio? Es síncrono pero requiere que el bridge haya propagado al nativo. Para garantizarlo en tests, `await` el call:
+
+```typescript
+await RNNetworkBridge.setActiveDomain('INSURANCE')
+console.log(getBaseURL())   // ahora sí
+```
+
+## `Could not resolve …contracts:1.x.x` (Android)
+
+Verificar:
+
+1. Que el repo Maven interno está agregado en `settings.gradle.kts`.
+2. Que las credenciales (`scotiaNexusUser`/`scotiaNexusPass`) están en `~/.gradle/gradle.properties` o variables de entorno.
+3. Que la versión existe en el Nexus (`./gradlew :app:dependencyInsight --dependency contracts`).
+
+## Versiones inconsistentes entre host y expo-module
+
+Si el host usa contracts `1.1.0` y el expo-module está pineado a `1.0.x`, la JVM/Swift resuelve una sola — generalmente la más alta — y rompe los símbolos que estaban en la versión más baja.
+
+Diagnóstico:
+
+```bash
+# Android
+./gradlew :app:dependencyInsight --dependency contracts
+
+# iOS
+pod outdated
+```
+
+Solución: actualizar `rn-network` para que pinee a la misma versión que el host.

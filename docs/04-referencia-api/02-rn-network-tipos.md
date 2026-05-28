@@ -1,49 +1,89 @@
-# Tipos
+# Tipos TS
 
-Todas las definiciones de tipos exportadas por `@scotia/rn-network`.
+Definiciones exportadas por `@scotia/rn-network`.
 
-## Red
-
-### `HttpMethod`
+## `AppConfig`
 
 ```typescript
-type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+interface DomainConfig {
+  key: DomainKey
+  baseURL: string
+}
+
+interface AppConfig {
+  country: CountryCode
+  environment: string
+  domains: DomainConfig[]
+}
+
+type DomainKey = string
+type CountryCode = string
 ```
 
-Los únicos métodos soportados por `request()`. No incluye `HEAD`, `OPTIONS`, `TRACE`, `CONNECT`.
+`activeDomain` **NO** está dentro de `AppConfig`. Vive en el registry nativo y en el contexto React; se lee con `RNNetworkBridge.getNativeActiveDomain()` y se modifica con `setActiveDomain` del `useAppConfig`.
 
-### `NetworkErrorCode`
+## `NetworkResponse<T>`
 
 ```typescript
-type NetworkErrorCode =
-  | 'SSL_PINNING_FAILED'
-  | 'TIMEOUT'
-  | 'NO_CONNECTIVITY'
-  | 'HTTP_CLIENT_ERROR'
-  | 'HTTP_SERVER_ERROR'
-  | 'PROVIDER_NOT_SET'
-  | 'UNKNOWN'
+interface NetworkResponse<T = Record<string, unknown>> {
+  body: T
+  statusCode: number
+  headers: Record<string, string>
+}
 ```
 
-Códigos posibles en `NetworkErrorPayload.code`. Ver [Manejo de errores](05-manejo-de-errores.md) para la tabla con causas y `retryable`.
+Lo que retorna `request<T>()` en éxito.
 
-### `NetworkErrorPayload`
+## `NetworkErrorPayload`
 
 ```typescript
 interface NetworkErrorPayload {
   code: NetworkErrorCode
   retryable: boolean
   httpStatus?: number
+  message?: string
+  info?: Record<string, unknown>
 }
 ```
 
-| Campo | Tipo | Notas |
-|---|---|---|
-| `code` | `NetworkErrorCode` | Categoría del error. |
-| `retryable` | `boolean` | Si el caller debería reintentar. La librería no reintenta sola. |
-| `httpStatus` | `number?` | Solo presente para `HTTP_CLIENT_ERROR` (4xx) y `HTTP_SERVER_ERROR` (5xx). |
+Forma de los errores que rechaza `request()`. Ver [05 · Manejo de errores](05-manejo-de-errores.md) para la tabla de códigos.
 
-### `NetworkProvider`
+## `NetworkErrorCode`
+
+```typescript
+type StandardNetworkErrorCode =
+  | 'SSL_PINNING_FAILED'
+  | 'TIMEOUT'
+  | 'NO_CONNECTIVITY'
+  | 'HTTP_CLIENT_ERROR'
+  | 'HTTP_SERVER_ERROR'
+  | 'PROVIDER_NOT_SET'
+  | 'SESSION_EXPIRED'
+  | 'SESSION_UNAUTHORIZED'
+  | 'INVALID_RESPONSE_BODY'
+  | 'CANCELLED'
+  | 'UNKNOWN'
+
+// Permite códigos host-específicos manteniendo autocomplete de los estándar.
+type NetworkErrorCode = StandardNetworkErrorCode | (string & {})
+```
+
+## `HttpMethod`
+
+```typescript
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+```
+
+## `RequestOptions`
+
+```typescript
+interface RequestOptions {
+  timeoutMs?: number   // override del global; 0 desactiva
+  requestId?: string   // override del UUID autogenerado
+}
+```
+
+## `NetworkProvider` (interfaz JS)
 
 ```typescript
 interface NetworkProvider {
@@ -52,13 +92,15 @@ interface NetworkProvider {
     method: HttpMethod,
     headers: Record<string, string>,
     body?: Record<string, unknown>
-  ): Promise<Record<string, unknown>>
+  ): Promise<NetworkResponse>
 }
 ```
 
-> **Cuidado:** este es el tipo JS de `NetworkProvider`, usado por `setProvider()`. Lo implementan mocks o providers JS para desarrollo. **No** es el mismo que el `NetworkProvider` nativo (Kotlin/Swift) — ese es un protocolo/interfaz separada que vive en `rn-network-contracts` y trabaja con bytes crudos.
+Lo implementa `MockNetworkProvider` y cualquier provider JS custom que pases a `setProvider`.
 
-### `MockNetworkProviderConfig`
+> Nota: la interfaz JS NO tiene `requestId` en `request()` ni método `cancel`. El bridge nativo lo agrega antes de llegar al host. El mock JS, al ser solo para desarrollo, no necesita correlación de cancel.
+
+## `MockNetworkProviderConfig`
 
 ```typescript
 interface MockNetworkProviderConfig {
@@ -66,67 +108,4 @@ interface MockNetworkProviderConfig {
 }
 ```
 
-Diccionario de pattern → respuesta. El pattern matchea por **substring** contra la URL completa; el más largo gana.
-
-## App config
-
-### `AppConfig`
-
-```typescript
-interface AppConfig {
-  country: CountryCode
-  environment: AppEnvironment
-  domains: DomainConfig[]
-  activeDomain: DomainKey
-}
-```
-
-Estructura tipada para usar con `AppConfigProvider`. En la práctica, `RNNetworkRegistry.appConfig` (nativo) es un `Map`/`Dictionary` libre — el lado JS hace la conversión.
-
-### `DomainConfig`
-
-```typescript
-interface DomainConfig {
-  key: DomainKey
-  baseURL: string
-}
-```
-
-### `DomainKey`
-
-```typescript
-type DomainKey = string
-```
-
-Alias para `string`. Por convención: `'prod'`, `'staging'`, `'qa'`, etc.
-
-### `CountryCode`
-
-```typescript
-type CountryCode = string
-```
-
-Alias para `string`. Por convención: ISO 3166-1 alpha-2 (`'CL'`, `'PE'`, `'MX'`, ...).
-
-### `AppEnvironment`
-
-```typescript
-type AppEnvironment = string
-```
-
-Alias para `string`. Por convención: `'prod'`, `'staging'`, `'qa'`, `'dev'`.
-
-## Mapeo JS ↔ nativo
-
-Cómo se serializan los tipos al cruzar el puente:
-
-| TS (JS) | Kotlin | Swift |
-|---|---|---|
-| `string` | `String` | `String` |
-| `number` | `Double` / `Int` | `Double` / `Int` |
-| `boolean` | `Boolean` | `Bool` |
-| `Record<string, unknown>` | `Map<String, Any?>` | `[String: Any]` |
-| `unknown[]` | `List<Any?>` | `[Any]` |
-| `null` / `undefined` | `null` | `nil` |
-
-La conversión JSON↔Map del lado nativo respeta esta tabla. Si la respuesta del servidor contiene tipos exóticos (BigInt, fechas como strings ISO, etc.) llegan como `string`/`number` y deben parsearse en JS.
+Las keys de `routes` aceptan `'/path'` o `'METHOD /path'`. Los valores son JSON; si tienen shape de `NetworkErrorPayload` (`{ code, retryable }`) el mock tira en vez de devolverlos.

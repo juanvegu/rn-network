@@ -1,94 +1,71 @@
 # Versionado y compatibilidad
 
+## Política
+
+| Tipo de cambio | Bump | Notas |
+|---|---|---|
+| Agregar campo opcional a `AppConfig` | minor | El JS valida con `parseAppConfig` y descarta extras |
+| Agregar método con default no-op a `NetworkProvider` | minor | Implementaciones existentes conforman gratis |
+| Agregar código estándar a `NetworkErrorCode` | minor | `NetworkErrorCode` es `string & {}`, no rompe consumidores |
+| Cambiar firma de `NetworkProvider.request` | **major** | Requiere migración del host |
+| Cambiar shape de `NetworkResponse` o `NetworkError` | **major** | Requiere migración del host |
+| Eliminar campo o tipo público | **major** | |
+
+## Sincronización iOS ↔ Android
+
+Los repos `rn-network-contracts-ios` y `rn-network-contracts-android` van **siempre al mismo `MAJOR.MINOR`**. Patches pueden divergir si son fixes específicos de plataforma.
+
+**Regla**: cualquier PR que toque el contrato (firmas, registry fields, error codes) abre PRs simultáneos en ambos repos. El revisor verifica equivalencia antes de aprobar cualquiera de los dos.
+
+### Mecanismos para evitar drift
+
+1. **Doc de paridad** (link compartido en ambos READMEs) con tabla de firmas — fuente de verdad escrita antes de tocar código.
+2. **CHANGELOG.md espejo** en ambos repos.
+3. **CODEOWNERS** con el equipo de network/platform en ambos, no solo el equipo de cada plataforma.
+4. **PR template** con checkbox "este cambio toca el contrato — link al PR equivalente en el otro repo".
+
+## Sincronización contrato ↔ módulo Expo
+
+`@scotia/rn-network` declara dependencias **pineadas** a versiones exactas:
+
+```ruby
+# rn-network/ios/RnNetwork.podspec
+s.dependency 'NetworkContracts', '1.1.0'
+```
+
+```groovy
+// rn-network/android/build.gradle
+implementation 'cl.scotiabank.rnnetwork:contracts:1.1.0'
+```
+
+Así garantizamos que la versión del módulo Expo se prueba contra la misma versión del contrato que se publica. Cuando bumpeás el contrato, también bumpeás el módulo Expo con un PR que actualice estas líneas.
+
 ## Versiones actuales (referencia)
 
-| Componente | Versión | Coordenadas |
+| Componente | Versión | Repo |
 |---|---|---|
-| `@scotia/rn-network` | `0.1.33` | npm / `github:juanvegu/scotia-rn-network` |
-| `rn-network-contracts` (Android) | `1.0.8` | `com.github.juanvegu:rn-network-contracts:1.0.8` |
-| `rn-network-contracts` (iOS) | `1.0.3` (podspec) | Pod `NetworkContracts` vía `scotia-podspecs` |
+| `NetworkContracts` (iOS) | 1.1.0 | `rn-network-contracts-ios` |
+| `cl.scotiabank.rnnetwork:contracts` (Android) | 1.1.0 | `rn-network-contracts-android` |
+| `@scotia/rn-network` | 1.1.x | `rn-network` |
 
-## Regla de oro
+## Migración 1.0 → 1.1 (host del banco)
 
-**Ambos lados que consumen `contracts` deben usar la misma versión.**
+Breaking changes principales:
 
-- En Android: la app host y el módulo Android de `rn-network` deben declarar el mismo tag de `com.github.juanvegu:rn-network-contracts`.
-- En iOS: la app host y la app RN (vía Podfile generado por prebuild) deben resolver al mismo `NetworkContracts.podspec`.
+- `NetworkProvider.request` ahora recibe `requestId` como primer parámetro y retorna `NetworkResponse` en lugar de `Data`/`ByteArray`.
+- `RNNetworkRegistry.appConfig` pasó de diccionario a `AppConfig` struct/data class. `activeDomain` ya no vive dentro — es un campo separado del registry.
+- `CancellableNetworkProvider` se eliminó: ahora `cancel(requestId)` es opcional dentro del `NetworkProvider`.
+- `NetworkError` typed agregado al contrato — opcional pero recomendado para errores de dominio.
 
-Si las versiones divergen:
+Checklist del host:
 
-- Android: Gradle resuelve la versión más nueva (regla de Maven), pero si las clases cambiaron entre versiones puede haber `NoSuchMethodError`/`NoClassDefFoundError`.
-- iOS: CocoaPods falla en `pod install` con un conflicto explícito.
-
-## Compatibilidad entre componentes
-
-El contrato núcleo (`NetworkProvider.request(url, method, headers, body) -> bytes`) **no cambia entre versiones de `contracts`**. Esto se respeta como invariante de diseño (ver [Decisiones técnicas §3](04-decisiones-tecnicas.md)).
-
-Implicación: una versión `1.x` de `contracts` siempre es ABI-compatible con cualquier otra `1.y` para el método núcleo. Nuevas capacidades se añaden como interfaces extra (`CancellableNetworkProvider`, etc.).
-
-| Cambio en contracts | Impacto |
-|---|---|
-| Bump de patch en una interfaz opcional | Sin impacto — el módulo RN detecta en runtime con `is CancellableNetworkProvider`. |
-| Bump añadiendo una nueva interfaz opcional | Sin impacto en hosts existentes; opcional implementarla. |
-| Cambiar la firma de `NetworkProvider.request` | **No permitido** — sería un major breaking change que rompe todos los hosts. |
-| Cambiar el shape de `appConfig` | No es un cambio de API estrictamente (es un mapa libre), pero se debe coordinar con el módulo RN. |
-
-## Compatibilidad entre `rn-network` y `contracts`
-
-| `rn-network` | `contracts` mín | Notas |
-|---|---|---|
-| `0.1.x` | Android `1.0.8`, iOS `1.0.3` | Versiones validadas en producción. |
-| Versiones futuras | Por confirmar | Si se introduce un método nuevo en el módulo nativo que requiera una capacidad de contracts (ej. cancellation), declarar el mínimo aquí. |
-
-## Tipo de cambios y consecuencias
-
-| Tipo de cambio | En qué se traduce |
-|---|---|
-| Nuevo método en la **API JS** | Solo bump de `@scotia/rn-network`. No requiere update de host. |
-| Nuevo método en el **módulo nativo** | Bump de `@scotia/rn-network`. No requiere update de host **si** no depende de capacidades nuevas de contracts. |
-| Nueva interfaz opcional en **contracts** | Bump de `contracts`. Bump del módulo nativo de `rn-network` si lo va a explotar. Hosts viejos siguen funcionando con degradación elegante. |
-| Cambio en el shape de `appConfig` esperado por el módulo nativo | Coordinar bump simultáneo de `rn-network` y de los hosts que producen el config. |
-
-## Cómo verificar la consistencia en una integración
-
-### Android
-
-```bash
-./gradlew :app:dependencyInsight --dependency rn-network-contracts
+```text
+[ ] Implementar request(requestId:url:method:headers:body:) -> NetworkResponse
+[ ] Retornar 204 como NetworkResponse(statusCode: 204, data: nil)
+[ ] NO clasificar 4xx/5xx — el módulo lo hace por statusCode
+[ ] Tirar NetworkError(...) para SESSION_EXPIRED y otros casos de dominio
+[ ] Reemplazar RNNetworkRegistry.appConfig = [String: Any] por AppConfig struct
+[ ] Setear RNNetworkRegistry.activeDomain = "BFF" (antes vivía dentro del dict)
+[ ] Asignar RNNetworkRegistry.onSessionExpired = { … } para notificar al JS
+[ ] Eliminar conformance a CancellableNetworkProvider; mover cancel al NetworkProvider
 ```
-
-Debe mostrar **una única versión** resuelta. Si aparecen dos, hay un conflicto.
-
-### iOS
-
-```bash
-cd ios && pod outdated
-```
-
-Verifica que `NetworkContracts` esté en la versión esperada. Después de un `pod install`, también revisar `Podfile.lock`:
-
-```
-NetworkContracts (1.0.3)
-```
-
-### Runtime (Android)
-
-Desde JS, en debug build:
-
-```typescript
-import { RNNetworkBridge } from '@scotia/rn-network'
-// debugIdentity solo existe en el módulo Android
-console.log((RNNetworkBridge as any).debugIdentity?.())
-```
-
-Y comparar con un `Log.d` desde el host:
-
-```kotlin
-Log.d("Net", "host id=${System.identityHashCode(RNNetworkRegistry)} cl=${RNNetworkRegistry::class.java.classLoader}")
-```
-
-Mismo `registryId` y mismo `classloader` ⇒ singleton compartido. Distintos ⇒ contracts duplicado, integración rota.
-
-### Runtime (iOS)
-
-No hay `debugIdentity` en iOS por ahora. La validación se hace indirectamente: si `RNNetworkRegistry.provider != nil` desde el host pero `hasNativeProvider()` devuelve `false` desde JS, el framework está duplicado (típicamente porque `NetworkContracts` quedó estático).

@@ -1,51 +1,30 @@
-# iOS — Registrar el provider
+# iOS · Registrar el provider
 
-Cómo implementar `NetworkProvider` y asignarlo a `RNNetworkRegistry.provider`.
-
-## 1. Implementar `NetworkProvider`
-
-La interfaz (definida en `NetworkContracts`):
+## Implementación de referencia (URLSession)
 
 ```swift
-public protocol NetworkProvider {
-    func request(
-        url: String,
-        method: String,
-        headers: [String: String],
-        body: [String: Any]?
-    ) async throws -> Data
-}
-```
-
-Implementación típica con URLSession + pinning. Para SSL pinning en iOS, lo usual es un `URLSessionDelegate` que valida el `serverTrust` contra una SPKI conocida:
-
-```swift
-import Foundation
 import NetworkContracts
+import Foundation
 
-final class AppNetworkProvider: NSObject, NetworkProvider {
+final class AppNetworkProvider: NetworkProvider {
+    private let session: URLSession
 
-    private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }()
-
-    private let pinnedSPKIs: [String: String] = [
-        "api.bank.cl": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-    ]
+    // En producción: configurar URLSessionDelegate con pinning, certificados del banco, etc.
+    init(session: URLSession = .shared) { self.session = session }
 
     func request(
+        requestId: String,
         url: String,
         method: String,
         headers: [String: String],
         body: [String: Any]?
-    ) async throws -> Data {
-        guard let u = URL(string: url) else {
-            throw NSError(domain: "AppNetworkProvider", code: -1)
+    ) async throws -> NetworkResponse {
+        guard let parsed = URL(string: url) else {
+            throw NetworkError(code: "UNKNOWN", retryable: false)
         }
-        var req = URLRequest(url: u)
-        req.httpMethod = method.uppercased()
+
+        var req = URLRequest(url: parsed)
+        req.httpMethod = method
         headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
         if let body = body {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -55,152 +34,75 @@ final class AppNetworkProvider: NSObject, NetworkProvider {
         }
 
         let (data, response) = try await session.data(for: req)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            // El módulo RN mapea este formato a NetworkErrorCode (HTTP_CLIENT_ERROR / HTTP_SERVER_ERROR)
-            throw NSError(
-                domain: "com.scotia.rnnetwork.http",
-                code: http.statusCode
-            )
-        }
-        return data
-    }
-}
-
-extension AppNetworkProvider: URLSessionDelegate {
-    func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        guard
-            challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-            let serverTrust = challenge.protectionSpace.serverTrust
-        else {
-            completionHandler(.performDefaultHandling, nil)
-            return
+        guard let http = response as? HTTPURLResponse else {
+            throw NetworkError(code: "UNKNOWN", retryable: false)
         }
 
-        let host = challenge.protectionSpace.host
-        guard let expectedSPKI = pinnedSPKIs[host] else {
-            // Host no pinneado — política a definir: aceptar o rechazar
-            completionHandler(.performDefaultHandling, nil)
-            return
+        // Caso de dominio: sesión expirada (header definido por el banco).
+        if http.statusCode == 401,
+           http.value(forHTTPHeaderField: "X-Session-Expired") == "true" {
+            throw NetworkError(code: "SESSION_EXPIRED", retryable: false, httpStatus: 401)
         }
 
-        // Cálculo simplificado: extraer SPKI del leaf y comparar base64 con expectedSPKI
-        // (omitir en este snippet por brevedad — usar TrustKit u otra librería en prod)
-        let pinValid = validateSPKI(serverTrust: serverTrust, expected: expectedSPKI)
-        if pinValid {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-        } else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-        }
+        let headers = (http.allHeaderFields as? [String: String]) ?? [:]
+
+        // NO clasificamos 4xx/5xx — el módulo Expo lo hace por statusCode.
+        return NetworkResponse(
+            statusCode: http.statusCode,
+            headers: headers,
+            data: http.statusCode == 204 ? nil : data
+        )
     }
-
-    private func validateSPKI(serverTrust: SecTrust, expected: String) -> Bool {
-        // Implementación real: extraer la SPKI del certificado leaf,
-        // hashear con SHA-256, comparar base64 con `expected`.
-        // En producción: usar TrustKit, Alamofire ServerTrustManager, etc.
-        return true
-    }
-}
-```
-
-> **Nota:** la validación de pinning de arriba está simplificada. En producción usa una librería probada (TrustKit, Alamofire) o sigue la [guía OWASP](https://owasp.org/www-community/controls/Certificate_and_Public_Key_Pinning).
-
-## 2. Registrar antes de inicializar React Native
-
-### Caso A — `UIApplicationDelegate` (UIKit)
-
-```swift
-import UIKit
-import NetworkContracts
-
-@UIApplicationMain
-class AppDelegate: UIResponder, UIApplicationDelegate {
-
-    func application(
-        _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-    ) -> Bool {
-
-        // 1) Registrar el provider
-        RNNetworkRegistry.provider = AppNetworkProvider()
-
-        // 2) Registrar appConfig
-        RNNetworkRegistry.appConfig = [
-            "country": "CL",
-            "environment": "prod",
-            "domains": [
-                ["key": "prod",    "baseURL": "https://api.bank.cl"],
-                ["key": "staging", "baseURL": "https://staging.bank.cl"],
-            ],
-            "activeDomain": "prod"
-        ]
-
-        // 3) SOLO AHORA inicializar React Native
-        // ReactNativeHostManager.shared.initialize()  // o equivalente
-
-        return true
-    }
-}
-```
-
-### Caso B — SwiftUI app lifecycle (`@main` struct)
-
-```swift
-import SwiftUI
-import NetworkContracts
-
-@main
-struct AppNative: App {
-
-    init() {
-        RNNetworkRegistry.provider = AppNetworkProvider()
-        RNNetworkRegistry.appConfig = [
-            "country": "CL",
-            "environment": "prod",
-            "domains": [
-                ["key": "prod",    "baseURL": "https://api.bank.cl"]
-            ],
-            "activeDomain": "prod"
-        ]
-
-        // Inicializar React Native después
-        // ReactNativeHostManager.shared.initialize()
-    }
-
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-    }
-}
-```
-
-## 3. `CancellableNetworkProvider` (opcional)
-
-```swift
-final class AppNetworkProvider: NSObject, CancellableNetworkProvider {
-    // request(...) como antes
 
     func cancel(requestId: String) {
-        // tu lógica de cancelación
+        // Opcional. Buscar el URLSessionTask asociado al requestId y `.cancel()`.
     }
 }
 ```
 
-El módulo RN detecta en runtime si el provider conforma a `CancellableNetworkProvider` y degrada elegantemente si no.
+## Registro
 
-## Pitfalls comunes
+En `AppDelegate.application(_:didFinishLaunchingWithOptions:)`, **antes** de inicializar el host de RN:
 
-| Síntoma | Causa | Fix |
+```swift
+import NetworkContracts
+
+// 1. AppConfig estático
+RNNetworkRegistry.appConfig = AppConfig(
+    country: "CL",
+    environment: "prod",
+    domains: [
+        DomainConfig(key: "BFF", baseURL: "https://api.bank.cl"),
+        DomainConfig(key: "INSURANCE", baseURL: "https://insurance.bank.cl"),
+    ]
+)
+
+// 2. Dominio activo inicial
+RNNetworkRegistry.activeDomain = "BFF"
+
+// 3. Provider real (omitir si querés que la RN caiga al mock JS)
+RNNetworkRegistry.provider = AppNetworkProvider()
+
+// 4. Notificar a JS cuando la sesión se cae
+RNNetworkRegistry.onSessionExpired = { [weak self] in
+    self?.logger.warn("Session expired, notifying RN")
+}
+
+// 5. SIEMPRE al final
+ReactNativeHostManager.shared.initialize()
+```
+
+## Errores a tirar como `NetworkError`
+
+| Situación | `code` sugerido | `retryable` |
 |---|---|---|
-| `isAvailable()` retorna `false` | `RNNetworkRegistry.provider == nil` (orden o framework duplicado) | Verificar orden; ejecutar smoke test desde Swift |
-| El host ve `provider != nil` pero JS ve `false` | `NetworkContracts` quedó estático ⇒ dos copias del símbolo | Aplicar el `pre_install` hook que fuerza dynamic framework |
-| Pinning falla con "Cancelled" | Hash incorrecto / cert rotado | Recalcular SPKI; en debug, loggear el hash recibido para comparar |
-| Funciona en simulador, falla en device | App Transport Security bloquea HTTP | Solo usar HTTPS en producción; HTTP solo en debug con `NSAllowsArbitraryLoads` |
+| 401 con header de sesión expirada | `SESSION_EXPIRED` | false |
+| 401 por credenciales malas | `SESSION_UNAUTHORIZED` | false |
+| 429 con `Retry-After` | `RATE_LIMITED` (con `info = ["retryAfter": N]`) | true |
+| Cualquier código de dominio del banco | `SCOTIA_*` | según corresponda |
 
-## Siguiente paso
+Para 4xx/5xx genéricos **no tires** — devolvé el `NetworkResponse` con el status y dejá que el módulo lo clasifique.
 
-[Orden de inicialización →](05-orden-de-inicializacion.md)
+## Errores del sistema
+
+`URLError` (timeout, no connectivity, SSL pinning), `CancellationError` — **dejá que se propaguen**. El `NetworkErrorMapper` del módulo Expo los traduce a códigos estándar.

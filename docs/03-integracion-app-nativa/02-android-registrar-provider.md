@@ -1,82 +1,84 @@
-# Android — Registrar el provider
+# Android · Registrar el provider
 
 Cómo implementar `NetworkProvider` y registrarlo en `RNNetworkRegistry`.
 
-## 1. Implementar `NetworkProvider`
-
-La interfaz (definida en `rn-network-contracts`) es:
+## Implementación de referencia (OkHttp + pinning)
 
 ```kotlin
-interface NetworkProvider {
-    suspend fun request(
-        url: String,
-        method: String,
-        headers: Map<String, String>,
-        body: Map<String, Any?>?
-    ): ByteArray
-}
-```
-
-Implementación típica con OkHttp + certificate pinning:
-
-```kotlin
-package com.example.app.network
-
+import com.scotia.rnnetwork.contracts.NetworkError
 import com.scotia.rnnetwork.contracts.NetworkProvider
+import com.scotia.rnnetwork.contracts.NetworkResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.CertificatePinner
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class AppNetworkProvider : NetworkProvider {
-
-    private val client = OkHttpClient.Builder()
-        .certificatePinner(
-            CertificatePinner.Builder()
-                .add("api.bank.cl", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-                .build()
-        )
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+class AppNetworkProvider(
+    private val client: OkHttpClient = buildClient(),
+) : NetworkProvider {
 
     override suspend fun request(
+        requestId: String,
         url: String,
         method: String,
         headers: Map<String, String>,
-        body: Map<String, Any?>?
-    ): ByteArray = withContext(Dispatchers.IO) {
-        val requestBody = body?.let {
-            JSONObject(it).toString().toRequestBody("application/json".toMediaType())
-        }
-
-        val httpRequest = Request.Builder()
-            .url(url)
-            .apply { headers.forEach { (k, v) -> header(k, v) } }
-            .method(method.uppercase(), requestBody)
-            .build()
-
-        client.newCall(httpRequest).execute().use { response ->
-            val bytes = response.body?.bytes() ?: ByteArray(0)
-            if (!response.isSuccessful) {
-                // Convención: la primera parte del mensaje permite al módulo RN
-                // mapear el código HTTP a NetworkErrorCode.
-                throw IOException("com.scotia.rnnetwork.http:${response.code}")
+        body: Map<String, Any?>?,
+    ): NetworkResponse = withContext(Dispatchers.IO) {
+        val req = Request.Builder().url(url).apply {
+            headers.forEach { (k, v) -> header(k, v) }
+            val rb = body?.let {
+                JSONObject(it).toString().toRequestBody("application/json".toMediaType())
             }
-            bytes
+            method(method.uppercase(), rb)
+            tag(requestId)             // ← clave para cancel(requestId)
+        }.build()
+
+        client.newCall(req).execute().use { resp ->
+            // Caso de dominio: sesión expirada (header definido por el banco) → error tipado.
+            if (resp.code == 401 && resp.header("X-Session-Expired") == "true") {
+                throw NetworkError(
+                    code = "SESSION_EXPIRED",
+                    retryable = false,
+                    httpStatus = 401,
+                )
+            }
+
+            val bytes = resp.body?.bytes()?.takeIf { it.isNotEmpty() }
+            val headerMap = resp.headers.toMultimap()
+                .mapValues { it.value.joinToString(", ") }
+
+            // OJO: NO clasificamos 4xx/5xx acá. El módulo Expo lo hace por statusCode.
+            NetworkResponse(
+                statusCode = resp.code,
+                headers = headerMap,
+                data = if (resp.code == 204) null else bytes,
+            )
         }
+    }
+
+    override fun cancel(requestId: String) {
+        client.dispatcher.queuedCalls().firstOrNull { it.request().tag() == requestId }?.cancel()
+        client.dispatcher.runningCalls().firstOrNull { it.request().tag() == requestId }?.cancel()
+    }
+
+    companion object {
+        private fun buildClient() = OkHttpClient.Builder()
+            .certificatePinner(
+                CertificatePinner.Builder()
+                    .add("api.bank.cl", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+                    .build()
+            )
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
     }
 }
 ```
 
-> **Pin format:** `sha256/<base64-de-SPKI>`. Cómo calcularlo:
->
+> **Pin format:** `sha256/<base64-de-SPKI>`. Se calcula con:
 > ```bash
 > openssl x509 -in cert.pem -pubkey -noout | \
 >   openssl pkey -pubin -outform DER | \
@@ -84,101 +86,57 @@ class AppNetworkProvider : NetworkProvider {
 >   openssl base64
 > ```
 
-## 2. Registrar antes de inicializar RN
+## Registro
 
-En tu `Application` subclass:
+En `MainApplication.onCreate`, **antes** de inicializar el host de RN:
 
 ```kotlin
-package com.example.app
-
-import android.app.Application
-import android.util.Log
-import com.example.app.network.AppNetworkProvider
-import com.scotia.rnnetwork.contracts.RNNetworkRegistry
+import com.scotia.rnnetwork.contracts.*
 
 class MainApplication : Application() {
-
     override fun onCreate() {
         super.onCreate()
 
-        // 1) Registrar el provider
+        // 1. AppConfig estático
+        RNNetworkRegistry.appConfig = AppConfig(
+            country = "CL",
+            environment = "prod",
+            domains = listOf(
+                DomainConfig(key = "BFF", baseURL = "https://api.bank.cl"),
+                DomainConfig(key = "INSURANCE", baseURL = "https://insurance.bank.cl"),
+            ),
+        )
+
+        // 2. Dominio activo inicial
+        RNNetworkRegistry.activeDomain = "BFF"
+
+        // 3. Provider real (omitir si querés que la RN caiga al mock JS)
         RNNetworkRegistry.provider = AppNetworkProvider()
 
-        // 2) Registrar appConfig
-        RNNetworkRegistry.appConfig = mapOf(
-            "country" to "CL",
-            "environment" to "prod",
-            "domains" to listOf(
-                mapOf("key" to "prod",    "baseURL" to "https://api.bank.cl"),
-                mapOf("key" to "staging", "baseURL" to "https://staging.bank.cl"),
-            ),
-            "activeDomain" to "prod",
-        )
+        // 4. Notificar a JS cuando la sesión se cae
+        RNNetworkRegistry.onSessionExpired = {
+            // Por ejemplo, después de fallar el token refresh:
+            Log.w("Net", "Session expired, notifying RN")
+        }
 
-        // 3) Validación opcional: confirmar que el registry es el mismo singleton
-        Log.d(
-            "Net",
-            "host registryId=${System.identityHashCode(RNNetworkRegistry)} " +
-                "classloader=${RNNetworkRegistry::class.java.classLoader}"
-        )
-
-        // 4) SOLO AHORA inicializar React Native
-        // ReactNativeHostManager.initialize(this)  // o equivalente
+        // 5. SIEMPRE al final
+        ReactNativeHostManager.initialize(this)
     }
 }
 ```
 
-Declarar la clase en `AndroidManifest.xml`:
+## Errores que vale la pena tirar como `NetworkError`
 
-```xml
-<application
-    android:name=".MainApplication"
-    ... >
-</application>
-```
-
-## 3. Verificar la identidad del singleton
-
-Después de que la app RN cargue, desde JS:
-
-```typescript
-import { RNNetworkBridge } from '@scotia/rn-network'
-
-const id = (RNNetworkBridge as any).debugIdentity?.()
-console.log(id)
-// "registryId=12345678 classloader=dalvik.system.PathClassLoader[...]"
-```
-
-Compara `registryId` con el `Log.d` del host. Si son iguales ⇒ singleton compartido, integración OK. Si difieren ⇒ contracts está duplicado en classpath (revisar `dependencyInsight`).
-
-## 4. `CancellableNetworkProvider` (opcional)
-
-Si tu app quiere soportar cancelación de requests, implementa la interfaz extendida:
-
-```kotlin
-import com.scotia.rnnetwork.contracts.CancellableNetworkProvider
-
-class AppNetworkProvider : CancellableNetworkProvider {
-    // request(...) como antes
-    override fun cancel(requestId: String) {
-        // lógica de cancelación
-    }
-}
-```
-
-El módulo RN detecta `is CancellableNetworkProvider` en runtime. Si no lo implementas, no pasa nada — degrada elegantemente.
-
-> **Nota:** la API JS para invocar `cancel(requestId)` aún no está expuesta en `@scotia/rn-network` (a la fecha de esta doc, v0.1.33). La interfaz existe como reserva para una expansión futura.
-
-## Pitfalls comunes
-
-| Síntoma | Causa | Fix |
+| Situación | `code` sugerido | `retryable` |
 |---|---|---|
-| `isAvailable()` retorna `false` desde JS | `RNNetworkRegistry.provider` quedó null | Verificar que `onCreate` se ejecuta antes del primer `request()` |
-| `PROVIDER_NOT_SET` aunque registraste | Orden: registraste **después** de inicializar RN | Mover el `RNNetworkRegistry.provider = ...` **antes** de la init de RN |
-| Funciona en debug pero falla en release | ProGuard/R8 eliminó las clases | Añadir reglas keep: `-keep class com.scotia.rnnetwork.contracts.** { *; }` |
-| Pinning falla en `staging` pero funciona en `prod` | Pin solo cubre el host de prod | Añadir hosts adicionales al `CertificatePinner` o usar pinning condicional por `activeDomain` |
+| 401 con header de sesión expirada | `SESSION_EXPIRED` | false |
+| 401 por credenciales malas | `SESSION_UNAUTHORIZED` | false |
+| 429 con `Retry-After` | `RATE_LIMITED` (con `info = { retryAfter: N }`) | true |
+| 403 por geolocalización | `SCOTIA_GEO_BLOCKED` | false |
+| Cualquier código de dominio del banco | `SCOTIA_*` | según corresponda |
 
-## Siguiente paso
+Para 4xx/5xx genéricos **no tires** — devolvé el `NetworkResponse` con el status y dejá que el módulo lo clasifique como `HTTP_CLIENT_ERROR` o `HTTP_SERVER_ERROR`.
 
-[iOS — consumir contracts →](03-ios-consumir-contracts.md)
+## Errores del sistema
+
+`SocketTimeoutException`, `UnknownHostException`, `SSLException`, `CancellationException` — **dejá que se propaguen**. El `NetworkErrorMapper` del módulo Expo los traduce a códigos estándar (`TIMEOUT`, `NO_CONNECTIVITY`, `SSL_PINNING_FAILED`, `CANCELLED`).

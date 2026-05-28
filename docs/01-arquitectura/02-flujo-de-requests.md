@@ -1,115 +1,106 @@
 # Flujo de requests
 
-Recorrido detallado de qué pasa cuando el código JS llama a `request()`.
+Recorrido completo de un `request()` desde React hasta el HTTP del banco, incluyendo errores y cancelación.
 
-## Caso 1 — Modo nativo (producción)
+## Camino feliz (HTTP 2xx con body JSON)
 
-La app RN está embebida en una app nativa que registró un `NetworkProvider`.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant JS as Código RN
-    participant API as @scotia/rn-network<br/>(src/index.ts)
-    participant Bridge as RNNetworkBridge<br/>(src/RNNetworkBridge.ts)
-    participant Mod as RNNetworkModule<br/>(nativo)
-    participant Reg as RNNetworkRegistry<br/>(de contracts)
-    participant Prov as Provider del host
-    participant Net as Red
-
-    JS->>API: request('/api/x', 'GET', {h}, {b})
-    Note over API: resolveURL(url)<br/>si es relativa, prepend baseURL
-    API->>Bridge: isAvailable()
-    Bridge->>Mod: hasNativeProvider()
-    Mod->>Reg: provider != null?
-    Reg-->>Mod: true
-    Mod-->>Bridge: true
-    Bridge-->>API: true
-    API->>Bridge: request(url, method, headers, body)
-    Bridge->>Mod: request(...)
-    Mod->>Reg: provider
-    Mod->>Prov: provider.request(url, method, headers, body)
-    Prov->>Net: HTTP request con pinning
-    Net-->>Prov: Data / ByteArray
-    Prov-->>Mod: bytes
-    Mod->>Mod: JSON parse → Map/Dictionary
-    Mod-->>Bridge: Map serializado
-    Bridge-->>API: Record<string, unknown>
-    API-->>JS: Promise resuelve con JSON
+```
+React           rn-network (TS)         RnNetworkModule           AppNetworkProvider
+  │                  │                       │                          │
+  │ request('/x')    │                       │                          │
+  ├─────────────────►│                       │                          │
+  │                  │ requestId = uuid()    │                          │
+  │                  │ resolveURL → base/x   │                          │
+  │                  │ Promise.race(         │                          │
+  │                  │   bridge.request,     │                          │
+  │                  │   setTimeout)         │                          │
+  │                  ├──────────────────────►│                          │
+  │                  │                       │ provider.request(...)    │
+  │                  │                       ├─────────────────────────►│
+  │                  │                       │                          │ URLSession / OkHttp
+  │                  │                       │                          │ pinning, sesión, etc.
+  │                  │                       │                          │
+  │                  │                       │◄─────────────────────────┤
+  │                  │                       │  NetworkResponse(        │
+  │                  │                       │    statusCode: 200,      │
+  │                  │                       │    headers: …,           │
+  │                  │                       │    data: <bytes>)        │
+  │                  │                       │                          │
+  │                  │                       │ if 2xx: parse JSON       │
+  │                  │                       │ else: throw HTTP_*       │
+  │                  │◄──────────────────────┤                          │
+  │                  │  { body, statusCode,  │                          │
+  │                  │    headers }          │                          │
+  │◄─────────────────┤                       │                          │
+  │  NetworkResponse │                       │                          │
 ```
 
-## Caso 2 — Modo desarrollo con mock JS
+## Errores
 
-`isAvailable()` retorna `false` (no hay módulo nativo o el provider no está registrado) y estamos en `__DEV__`. La app RN registró un `MockNetworkProvider` con `setProvider()`.
+### Non-2xx
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant JS as Código RN
-    participant API as @scotia/rn-network
-    participant Bridge as RNNetworkBridge
-    participant JReg as registry (JS)
-    participant Mock as MockNetworkProvider
+El módulo clasifica centralmente — el host no lo hace:
 
-    JS->>API: request('/api/x')
-    API->>API: resolveURL(url)
-    API->>Bridge: isAvailable()
-    Bridge-->>API: false
-    API->>JReg: jsProvider
-    JReg-->>API: MockNetworkProvider
-    Note over API: __DEV__ && mock ⇒ delegar
-    API->>Mock: mock.request(url, method, headers, body)
-    Mock->>Mock: match por substring contra routes
-    Mock-->>API: respuesta hardcodeada
-    API-->>JS: Promise resuelve
+- `400-499` → `NetworkException("HTTP_CLIENT_ERROR", retryable: false, httpStatus)`
+- `500-599` → `NetworkException("HTTP_SERVER_ERROR", retryable: true, httpStatus)`
+
+El JS recibe esto como `NetworkErrorPayload` reconstruido desde el JSON-in-`code` del error nativo.
+
+### Error tipado del host
+
+El host tira `NetworkError(code: "SESSION_EXPIRED", retryable: false, httpStatus: 401, message?, info?)`. El mapper lo pasa **verbatim** al JS sin re-clasificar. La app RN ramifica por `code`.
+
+### Error del sistema
+
+`URLError` (iOS), `IOException`/`SSLException` (Android), `CancellationError`/`CancellationException` → `NetworkErrorMapper.map(...)` los convierte a códigos estándar (`TIMEOUT`, `NO_CONNECTIVITY`, `SSL_PINNING_FAILED`, `CANCELLED`).
+
+### Body no parseable
+
+2xx pero el body no es JSON → `NetworkException("INVALID_RESPONSE_BODY", retryable: false)`.
+
+### 204 / cuerpo vacío
+
+`data == nil` o `data.isEmpty` → JS recibe `body: {}`. No es error.
+
+## Timeout cliente
+
+```
+React              rn-network (TS)
+  │                     │
+  │ request('/x')       │
+  ├────────────────────►│
+  │                     │ Promise.race(
+  │                     │   bridge.request,
+  │                     │   setTimeout(30_000))
+  │                     │
+  │                     │ … 30 s sin respuesta del nativo …
+  │                     │
+  │                     │ cancelRequest(requestId)   ───► provider.cancel
+  │                     │ throw { code: 'TIMEOUT', retryable: true }
+  │◄────────────────────┤
 ```
 
-## Caso 3 — Sin provider (error)
+Configuración:
 
-`isAvailable()` es `false` **y** no hay mock JS (o no estamos en `__DEV__`).
+- `setRequestTimeout(15_000)` global (default `30_000`, `0` desactiva).
+- `request(url, method, headers, body, { timeoutMs: 5_000 })` per-call.
+- `request(url, method, headers, body, { requestId: 'custom-id' })` per-call (sino se autogenera con `crypto.randomUUID()` o fallback).
 
-```mermaid
-sequenceDiagram
-    participant JS as Código RN
-    participant API as @scotia/rn-network
+## Sesión expirada (push desde nativo)
 
-    JS->>API: request('/api/x')
-    API->>API: isAvailable()? false
-    API->>API: __DEV__ && mock? no
-    API-->>JS: throw { code: 'PROVIDER_NOT_SET', retryable: false }
+```
+App nativa              rn-network-contracts            RnNetworkModule          React
+  │                            │                              │                    │
+  │ token refresh falla        │                              │                    │
+  │ invoca onSessionExpired?() │                              │                    │
+  ├───────────────────────────►│                              │                    │
+  │                            │ callback                     │                    │
+  │                            ├─────────────────────────────►│                    │
+  │                            │                              │ sendEvent(         │
+  │                            │                              │   'sessionExpired')│
+  │                            │                              ├───────────────────►│
+  │                            │                              │                    │ handler() del
+  │                            │                              │                    │ onSessionExpired
 ```
 
-## Resolución del URL (`resolveURL`)
-
-```typescript
-function resolveURL(url: string): string {
-  if (url.startsWith('http://') || url.startsWith('https://')) return url
-  const base = getBaseURL()
-  if (!base) return url
-  const path = url.startsWith('/') ? url : `/${url}`
-  return `${base}${path}`
-}
-```
-
-- URLs absolutas (`http(s)://...`) → se usan tal cual.
-- URLs relativas → se prependen al `baseURL` activo.
-- `baseURL` se obtiene de:
-  1. **Modo nativo**: `RNNetworkBridge.getNativeBaseURL()`, que lee `appConfig.activeDomain` y busca su entrada en `appConfig.domains`.
-  2. **Modo JS**: el valor seteado con `setBaseURL()` (guardado en `registry.baseURL` de la capa JS).
-
-## Conversión de respuesta
-
-El `NetworkProvider` nativo devuelve **bytes crudos** (`Data` en iOS, `ByteArray` en Android). El módulo nativo de `rn-network` se encarga de:
-
-1. Decodificar los bytes como UTF-8.
-2. Parsear como JSON.
-3. Convertir a `Map<String, Any>` (Kotlin) o `[String: Any]` (Swift).
-4. Devolver al puente JS, que lo recibe como `Record<string, unknown>`.
-
-Si el parseo falla, el módulo nativo lanza `{ code: 'UNKNOWN', retryable: false }`.
-
-> **Implicación:** la API actual asume que **todas** las respuestas son JSON objects (no arrays raíz, no texto plano, no binario). Si necesitas otros formatos, el contrato debería extenderse antes (ver [Decisiones técnicas](04-decisiones-tecnicas.md)).
-
-## Mapeo de errores
-
-El módulo nativo usa `NetworkErrorMapper` (interno) para traducir excepciones del provider o del stack de red a payloads tipados con forma `{ code, retryable, httpStatus? }`. La capa JS los re-lanza tal cual; ver [Manejo de errores](../04-referencia-api/05-manejo-de-errores.md) para la tabla completa.
+La app RN debe registrar el listener en `_layout.tsx` con `useEffect(() => onSessionExpired(handler), [])`.

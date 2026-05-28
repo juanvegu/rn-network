@@ -1,128 +1,114 @@
 # Manejo de errores
 
-Todos los errores que `@scotia/rn-network` lanza desde `request()` son rechazos de Promise con la forma:
+Todos los errores de `request()` rechazan con `NetworkErrorPayload`:
 
 ```typescript
 interface NetworkErrorPayload {
   code: NetworkErrorCode
   retryable: boolean
   httpStatus?: number
+  message?: string
+  info?: Record<string, unknown>
 }
 ```
 
-## Tabla de códigos
+## Tabla de códigos estándar
 
-| `code` | Causa típica | `retryable` esperado | `httpStatus` presente | Acción sugerida |
+La librería garantiza emitir/mapear estos códigos. Hosts pueden agregar los suyos (prefijo `SCOTIA_*` recomendado).
+
+| Código | Origen | `retryable` | `httpStatus` | Cuándo aparece |
 |---|---|---|---|---|
-| `SSL_PINNING_FAILED` | El certificado del servidor no coincide con el pin. Puede ser un ataque MITM, un certificado rotado sin actualizar el pin, o un proxy de debugging interceptando. | `false` | No | **No reintentar.** Reportar al equipo de seguridad. Revisar el pin contra el cert actual. |
-| `TIMEOUT` | La request superó el `connectTimeout` o `readTimeout` configurado en el provider nativo. | `true` | No | Reintentar con backoff exponencial. Si recurre, alertar al usuario sobre conexión lenta. |
-| `NO_CONNECTIVITY` | El device no tiene red (avión, sin señal). | `true` | No | Mostrar UI de "sin conexión". Reintentar cuando vuelva la conectividad. |
-| `HTTP_CLIENT_ERROR` | Status 4xx — error del cliente (auth, validación, recurso no encontrado, etc.). | `false` (por default) | Sí | **No reintentar** automáticamente. Manejar según el `httpStatus`: 401 ⇒ refresh token, 404 ⇒ feedback, 400 ⇒ validación de inputs. |
-| `HTTP_SERVER_ERROR` | Status 5xx — error del servidor. | `true` | Sí | Reintentar con backoff. Si recurre, alertar y dejar log para el equipo backend. |
-| `PROVIDER_NOT_SET` | No hay `NetworkProvider` registrado (en nativo) **y** no hay mock JS en `__DEV__`. | `false` | No | **Error de integración**, no de runtime. Ver [Orden de inicialización](../03-integracion-app-nativa/05-orden-de-inicializacion.md). |
-| `UNKNOWN` | Cualquier otro error: parse JSON fallido, excepción no clasificada del provider, mock sin ruta matching, etc. | `false` | No | Log con detalle. Si recurre, investigar el provider. |
+| `SSL_PINNING_FAILED` | mapper | false | — | Cert no matchea el pin |
+| `TIMEOUT` | mapper (sistema) o JS (cliente) | true | — | Request superó el timeout |
+| `NO_CONNECTIVITY` | mapper | true | — | Sin red / DNS fail / unreachable |
+| `HTTP_CLIENT_ERROR` | módulo | false | 4xx | Response con status 400–499 |
+| `HTTP_SERVER_ERROR` | módulo | true | 5xx | Response con status 500–599 |
+| `INVALID_RESPONSE_BODY` | módulo | false | (2xx) | 2xx pero body no es JSON parseable |
+| `CANCELLED` | mapper | false | — | Task/coroutine cancelada (incluye timeout cliente) |
+| `SESSION_EXPIRED` | host | false | usualmente 401 | Host detectó sesión vencida |
+| `SESSION_UNAUTHORIZED` | host | false | 401 | 401 que no es expiración (credenciales) |
+| `PROVIDER_NOT_SET` | módulo | false | — | Sin provider nativo y sin mock JS |
+| `UNKNOWN` | mapper | false | — | Error que no encaja en ningún caso |
 
 ## Patrón de manejo
 
-### Discriminar por `code`
-
 ```typescript
-import type { NetworkErrorPayload } from '@scotia/rn-network'
-
-async function fetchWithUX() {
-  try {
-    return await request('/api/data')
-  } catch (e) {
-    const err = e as NetworkErrorPayload
-    switch (err.code) {
-      case 'NO_CONNECTIVITY':
-        showToast('Sin conexión. Reintentando...')
-        return
-      case 'TIMEOUT':
-      case 'HTTP_SERVER_ERROR':
-        if (err.retryable) await retryWithBackoff()
-        return
-      case 'HTTP_CLIENT_ERROR':
-        if (err.httpStatus === 401) await refreshAuthAndRetry()
-        else showError(`Error ${err.httpStatus}`)
-        return
-      case 'SSL_PINNING_FAILED':
-        showError('Error de seguridad. Contacta soporte.')
-        reportToSecurity(err)
-        return
-      case 'PROVIDER_NOT_SET':
-        // Bug de integración. En prod nunca debería pasar.
-        console.error('PROVIDER_NOT_SET — host no registró el provider')
-        return
-      case 'UNKNOWN':
-      default:
-        showError('Algo salió mal.')
-    }
-  }
-}
-```
-
-### Wrapper con retry genérico
-
-```typescript
-async function requestWithRetry<T = Record<string, unknown>>(
-  url: string,
-  opts: { method?: HttpMethod; headers?: Record<string, string>; body?: Record<string, unknown> } = {},
-  maxAttempts = 3,
-): Promise<T> {
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const data = await request(url, opts.method, opts.headers, opts.body)
-      return data as T
-    } catch (e) {
-      const err = e as NetworkErrorPayload
-      if (!err.retryable || attempt === maxAttempts) throw err
-      await new Promise(r => setTimeout(r, 2 ** attempt * 250))
-    }
-  }
-  throw new Error('unreachable')
-}
-```
-
-## La librería **no** reintenta sola
-
-`request()` ejecuta exactamente una llamada al provider. La política de retry es responsabilidad del consumidor. El campo `retryable` es una **sugerencia**, no una garantía.
-
-## Errores que **no** son `NetworkErrorPayload`
-
-En casos excepcionales, un error que llega al `catch` puede no tener la forma esperada (ej. un error de programación que tira otro tipo de objeto). La capa nativa normaliza la mayoría de cosas, pero es buena práctica chequear:
-
-```typescript
-function isNetworkError(e: unknown): e is NetworkErrorPayload {
-  return (
-    typeof e === 'object' &&
-    e !== null &&
-    typeof (e as any).code === 'string' &&
-    typeof (e as any).retryable === 'boolean'
-  )
-}
-
 try {
-  await request('/api/x')
+  const res = await request<{ data: Foo }>('/v1/foo', 'POST', {}, payload)
+  // usar res.body.data
 } catch (e) {
-  if (isNetworkError(e)) {
-    // safe to access e.code, e.retryable, e.httpStatus
-  } else {
-    console.error('Unexpected error shape', e)
+  const err = e as NetworkErrorPayload
+  switch (err.code) {
+    case 'SESSION_EXPIRED':
+      router.replace('/login')
+      break
+
+    case 'NO_CONNECTIVITY':
+    case 'TIMEOUT':
+      toast.show('Sin conexión. Verificá tu red.', { retryable: true })
+      break
+
+    case 'HTTP_CLIENT_ERROR':
+      // err.httpStatus es 400-499. Mensaje específico del backend en err.message.
+      toast.show(err.message ?? 'Solicitud inválida.')
+      break
+
+    case 'HTTP_SERVER_ERROR':
+      toast.show('El servidor está fallando. Reintentá en unos minutos.')
+      break
+
+    case 'INVALID_RESPONSE_BODY':
+      logger.error('BFF returned non-JSON', { url: '/v1/foo' })
+      break
+
+    case 'CANCELLED':
+      // Usuario navegó o se disparó timeout cliente — no mostrar nada.
+      break
+
+    case 'SSL_PINNING_FAILED':
+      logger.fatal('Pinning failed; possible MITM', err)
+      Alert.alert('Error de seguridad', 'Cerrá y volvé a abrir la app.')
+      break
+
+    case 'PROVIDER_NOT_SET':
+      logger.fatal('No network provider registered', err)
+      break
+
+    default:
+      // Códigos host-específicos del banco (SCOTIA_*, etc.).
+      logger.warn('unhandled network code', err)
   }
 }
 ```
 
-(Internamente, `RNNetworkBridge` ya hace esta verificación y convierte cualquier cosa no reconocida a `{ code: 'UNKNOWN', retryable: false }`. Pero defensivamente, validar en el consumidor no hace daño.)
+## Códigos host-específicos
 
-## Cómo se mapean los errores en la capa nativa
+El host puede tirar cualquier código string que tenga sentido para el banco. Ejemplos:
 
-El módulo nativo usa una clase interna `NetworkErrorMapper` (no exportada en `contracts`) que recibe cualquier `Throwable`/`Error` del provider y devuelve un `NetworkException` con `code` y `retryable`. La heurística usual:
+```kotlin
+throw NetworkError(
+    code = "SCOTIA_KYC_PENDING",
+    retryable = false,
+    httpStatus = 403,
+    message = "El usuario debe completar KYC",
+    info = mapOf("kycUrl" to "https://kyc.bank.cl/start"),
+)
+```
 
-- `SSLException` / `SecTrustEvaluate` failure ⇒ `SSL_PINNING_FAILED`.
-- `SocketTimeoutException` / `URLError.timedOut` ⇒ `TIMEOUT`.
-- `UnknownHostException` / `URLError.notConnectedToInternet` ⇒ `NO_CONNECTIVITY`.
-- `IOException` con mensaje `com.scotia.rnnetwork.http:<status>` ⇒ `HTTP_CLIENT_ERROR` (400-499) o `HTTP_SERVER_ERROR` (500-599), con `httpStatus` extraído.
-- Cualquier otra cosa ⇒ `UNKNOWN`.
+El JS recibe esto verbatim:
 
-Si necesitas un control fino sobre cómo se clasifican errores específicos de tu host, lanza con el mensaje en el formato esperado.
+```typescript
+case 'SCOTIA_KYC_PENDING':
+  router.push(err.info?.kycUrl as string)
+  break
+```
+
+`NetworkErrorCode` es `StandardNetworkErrorCode | (string & {})` — TypeScript mantiene autocomplete de los estándar pero acepta cualquier string para los custom.
+
+## `retryable`
+
+Hint del provider o del módulo sobre si vale la pena reintentar. La librería **no** reintenta automáticamente — esa decisión es del consumidor (app o capa de servicios). Patrones recomendados:
+
+- **No retry para 4xx**: cambiar el request es responsabilidad del usuario.
+- **Retry exponencial para `TIMEOUT`, `NO_CONNECTIVITY`, `HTTP_SERVER_ERROR`**: con backoff y un cap razonable (3 intentos máx).
+- **Nunca retry para `SESSION_EXPIRED`**: forzar relogin.
