@@ -10,23 +10,27 @@ Pod::Spec.new do |s|
   s.license        = package['license']
   s.author         = package['author']
   s.homepage       = package['homepage']
-  s.platforms      = {
-    :ios => '15.1',
-    :tvos => '15.1'
-  }
+  s.platforms      = { :ios => '15.1' }
   s.swift_version  = '5.9'
   s.source         = { git: '' }
   s.static_framework = false
 
   s.dependency 'ExpoModulesCore'
-  s.spm_dependency 'NetworkContracts',
-    :url => 'https://github.com/juanvegu/rn-network-contracts.git',
-    :branch => 'main'
+
+  # NetworkContracts viaja como xcframework binario dentro de este paquete
+  # (ios/NetworkContracts.xcframework). Se sincroniza desde el repo de contracts
+  # con `rn-network-contracts/scripts/build-and-sync.sh`. La app nativa consume
+  # el mismo xcframework por SPM; ambas copias deben ser la MISMA versión para
+  # que dyld comparta un único RNNetworkRegistry (un solo singleton).
+  s.vendored_frameworks = 'NetworkContracts.xcframework'
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
   }
 
-  s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
+  # OJO: excluir el xcframework de los source_files para que CocoaPods no intente
+  # compilar nada adentro — solo lo enlaza vía vendored_frameworks.
+  s.source_files = '*.{h,m,mm,swift}'
+  s.exclude_files = 'NetworkContracts.xcframework/**/*'
 end

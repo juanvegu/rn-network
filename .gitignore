@@ -58,3 +58,5 @@ yarn-error.log
 
 
 build/
+# Synced from rn-network-contracts via build-and-sync.sh (local dev)
+ios/NetworkContracts.xcframework/

@@ -5,7 +5,7 @@
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {
-    "build": "expo-module build && tsc -p plugin/tsconfig.json",
+    "build": "expo-module build",
     "clean": "expo-module clean",
     "lint": "expo-module lint",
     "test": "expo-module test",
@@ -43,8 +43,5 @@
     "expo": "*",
     "react": "*",
     "react-native": "*"
-  },
-  "expo": {
-    "plugin": "build/plugin/withNetworkContracts"
   }
 }
