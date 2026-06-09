@@ -2,7 +2,7 @@
 import './src/networkConfig'
 
 import { isAvailable, request } from '@scotia/rn-network'
-import type { HttpMethod, NetworkErrorPayload } from '@scotia/rn-network'
+import type { HttpMethod, NetworkErrorPayload, NetworkResponse } from '@scotia/rn-network'
 import { useState } from 'react'
 import {
   ActivityIndicator,
@@ -17,7 +17,7 @@ import {
 type RequestState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'success'; data: Record<string, unknown> }
+  | { status: 'success'; response: NetworkResponse }
   | { status: 'error'; error: NetworkErrorPayload }
 
 export default function App() {
@@ -26,8 +26,9 @@ export default function App() {
   async function doRequest(url: string, method: HttpMethod = 'GET', body?: Record<string, unknown>) {
     setResult({ status: 'loading' })
     try {
-      const data = await request(url, method, {}, body)
-      setResult({ status: 'success', data })
+      // request() retorna el envelope { body, statusCode, headers } — no el body directo.
+      const response = await request(url, method, {}, body)
+      setResult({ status: 'success', response })
     } catch (e) {
       setResult({ status: 'error', error: e as NetworkErrorPayload })
     }
@@ -41,7 +42,7 @@ export default function App() {
 
         <Section title="Bridge">
           <Row label="isAvailable()" value={String(isAvailable())} />
-          <Row label="Modo" value={isAvailable() ? 'nativo' : '__DEV__ mock'} />
+          <Row label="Modo" value={isAvailable() ? 'provider nativo' : 'mock JS'} />
         </Section>
 
         <Section title="Requests">
@@ -105,9 +106,13 @@ function ResultView({ state }: { state: RequestState }) {
     )
   }
   return (
-    <Text style={styles.json}>
-      {JSON.stringify(state.data, null, 2)}
-    </Text>
+    <View style={{ gap: 6 }}>
+      <Text style={styles.rowValue}>statusCode: {state.response.statusCode}</Text>
+      <Text style={styles.rowLabel}>body:</Text>
+      <Text style={styles.json}>
+        {JSON.stringify(state.response.body, null, 2)}
+      </Text>
+    </View>
   )
 }
 
