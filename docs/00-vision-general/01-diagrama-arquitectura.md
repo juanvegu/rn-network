@@ -21,7 +21,7 @@
 └─────────────────────────────────────────┘         └──────────────────────────────────────┘
 
            ────────────────── contrato: rn-network-contracts ──────────────────
-                              (Swift Package / CocoaPod  +  Maven AAR)
+                              (xcframework binario [SPM + CocoaPods]  +  Maven AAR)
 ```
 
 ## Lecturas del diagrama

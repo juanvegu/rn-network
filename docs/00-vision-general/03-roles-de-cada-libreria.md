@@ -5,7 +5,7 @@
 | Aspecto | Detalle |
 |---|---|
 | **Lenguajes** | Swift (iOS) + Kotlin (Android), un repo por plataforma en Scotia |
-| **Distribución iOS** | Swift Package Manager **y** CocoaPods (mismo `Sources/`) |
+| **Distribución iOS** | **xcframework binario** (consumible por SPM `.binaryTarget` y CocoaPods `vendored_frameworks`). El `Package.swift` source existe pero se distribuye binario por la limitación Expo/CocoaPods — ver [decisión 11](../01-arquitectura/04-decisiones-tecnicas.md) |
 | **Distribución Android** | AAR en el Maven interno de Scotia |
 | **Deps externas** | Cero |
 | **Define** | `NetworkProvider`, `NetworkResponse`, `NetworkError`, `AppConfig`, `DomainConfig`, `RNNetworkRegistry` |
@@ -20,7 +20,7 @@
 | **Distribución** | npm interno de Scotia (registro privado) |
 | **Deps externas** | `expo-modules-core` (peer); cero deps runtime propias |
 | **Expone (JS)** | `request()`, `setProvider()`, `setBaseURL()`, `cancelRequest()`, `onSessionExpired()`, `setRequestTimeout()`, `AppConfigProvider`, `useAppConfig()`, `MockNetworkProvider`, `parseAppConfig()` |
-| **Depende de** | `rn-network-contracts` (Pod + AAR) |
+| **Depende de** | `rn-network-contracts`: iOS bundlea el `iOSNetworkContract.xcframework` (vendored); Android lo trae por AAR (Maven) |
 | **Lo consume** | Las apps RN del banco (ej. `car-insurance-scotia-rn`) |
 | **Hace** | Bridge JS↔nativo, fallback a mock cuando no hay provider, timeout cliente, evento `sessionExpired` |
 | **NO hace** | Pinning, manejo de tokens, retries de red, cache HTTP — todo eso vive en el provider del host |
