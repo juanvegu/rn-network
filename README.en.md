@@ -23,6 +23,76 @@ npm install @scotia/rn-network    # Scotia internal npm registry
 
 Peer deps: `expo`, `react`, `react-native`. **No** config plugin needed in `app.json`.
 
+## Configuration
+
+Three pieces of wiring in the app before calling `request()`:
+
+### 1. Dev fallback (when there is no native host)
+
+```typescript
+// src/config/devConfig.ts
+import type { AppConfig } from '@scotia/rn-network'
+
+export const fallbackDevConfig: AppConfig = {
+  country: 'CL',
+  environment: 'debug',
+  domains: [{ key: 'BFF', baseURL: 'http://localhost:8080' }],
+}
+export const fallbackDevActiveDomain = 'BFF'
+```
+
+### 2. Provider init (mock when there is no native provider)
+
+```typescript
+// src/networkConfig.ts
+import { setProvider, setBaseURL, isAvailable, MockNetworkProvider, setRequestTimeout } from '@scotia/rn-network'
+
+export function initNetworkConfig() {
+  setRequestTimeout(20_000)                    // optional — default 30s
+  if (__DEV__) setBaseURL('http://localhost:8080')
+
+  // No native provider → use the JS mock (binary rule, no __DEV__ gate).
+  if (!isAvailable()) {
+    setProvider(new MockNetworkProvider({
+      routes: {
+        'GET /v1/brands': require('./mocks/brands.json'),
+      },
+    }))
+  }
+}
+```
+
+### 3. Bootstrapping in the root layout
+
+```typescript
+// src/app/_layout.tsx
+import { useEffect } from 'react'
+import { AppConfigProvider, RNNetworkBridge, onSessionExpired } from '@scotia/rn-network'
+import type { AppConfig } from '@scotia/rn-network'
+import { router, Stack } from 'expo-router'
+import { initNetworkConfig } from '../networkConfig'
+import { fallbackDevConfig, fallbackDevActiveDomain } from '../config/devConfig'
+
+initNetworkConfig()   // configure the provider BEFORE any request
+
+// Config and active domain come from the native host (or the dev fallback).
+const initialConfig: AppConfig = RNNetworkBridge.getNativeAppConfig() ?? fallbackDevConfig
+const initialActiveDomain = RNNetworkBridge.getNativeActiveDomain() ?? fallbackDevActiveDomain
+
+export default function RootLayout() {
+  // Session expired (pushed from the native host) → redirect to login.
+  useEffect(() => onSessionExpired(() => router.replace('/login')), [])
+
+  return (
+    <AppConfigProvider initialConfig={initialConfig} initialActiveDomain={initialActiveDomain}>
+      <Stack />
+    </AppConfigProvider>
+  )
+}
+```
+
+With this in place, components can read/switch the active domain via `useAppConfig()` and call `request()`.
+
 ## Usage
 
 ```typescript
