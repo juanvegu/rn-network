@@ -1,35 +1,105 @@
 # @scotia/rn-network
 
-Networking bridge for Expo Brownfield in Scotiabank native apps
-
-# API documentation
-
-- [Documentation for the latest stable release](https://docs.expo.dev/versions/latest/sdk/@scotia/rn-network/)
-- [Documentation for the main branch](https://docs.expo.dev/versions/unversioned/sdk/@scotia/rn-network/)
-
-# Installation in managed Expo projects
-
-For [managed](https://docs.expo.dev/archive/managed-vs-bare/) Expo projects, please follow the installation instructions in the [API documentation for the latest stable release](#api-documentation). If you follow the link and there is no documentation available then this library is not yet usable within managed projects &mdash; it is likely to be included in an upcoming Expo SDK release.
-
-# Installation in bare React Native projects
-
-For bare React Native projects, you must ensure that you have [installed and configured the `expo` package](https://docs.expo.dev/bare/installing-expo-modules/) before continuing.
-
-### Add the package to your npm dependencies
+Bridge de red para React Native (Expo) embebido en las apps nativas de Scotia (expo-brownfield). El módulo **no hace HTTP** — delega cada request al stack nativo del banco (URLSession / OkHttp con pinning, sesión, telemetría) a través de un contrato compartido.
 
 ```
-npm install @scotia/rn-network
+React  ──request()──►  RnNetworkModule (Swift/Kotlin)  ──►  NetworkProvider del host nativo
+                              │
+                       si no hay provider → MockNetworkProvider (JS, dev/stubbed)
 ```
 
-### Configure for Android
+## Qué resuelve
 
+- La RN no reimplementa pinning/sesión/retries — usa el HTTP del banco.
+- Contrato tipado compartido (`NetworkResponse`, `NetworkError`, `AppConfig`) entre el host nativo y el módulo.
+- Fallback automático a mock JS cuando el host no registró provider (modo stubbed).
+- Timeout cliente, cancelación, evento `sessionExpired`.
 
+## Instalación
 
+```bash
+npm install @scotia/rn-network    # registro npm interno de Scotia
+```
 
-### Configure for iOS
+Peer deps: `expo`, `react`, `react-native`. **No** requiere config plugin en `app.json`.
 
-Run `npx pod-install` after installing the npm package.
+## Uso
 
-# Contributing
+```typescript
+import { request, onSessionExpired } from '@scotia/rn-network'
 
-Contributions are very welcome! Please refer to guidelines described in the [contributing guide]( https://github.com/expo/expo#contributing).
+// request() retorna el envelope { body, statusCode, headers }
+const res = await request<{ brands: Brand[] }>('/v1/brands', 'GET')
+console.log(res.body.brands, res.statusCode)
+
+// errores tipados
+try { await request('/v1/quote', 'POST', {}, payload) }
+catch (e) {
+  if (e.code === 'SESSION_EXPIRED') router.replace('/login')
+}
+
+// sesión expirada (push desde nativo)
+useEffect(() => onSessionExpired(() => router.replace('/login')), [])
+```
+
+### Mock para desarrollo
+
+```typescript
+import { isAvailable, setProvider, MockNetworkProvider } from '@scotia/rn-network'
+
+if (!isAvailable()) {
+  setProvider(new MockNetworkProvider({
+    routes: { 'GET /v1/brands': require('./mocks/brands.json') },
+  }))
+}
+```
+
+## El contrato nativo
+
+El módulo depende de `iOSNetworkContract` (iOS) y `cl.scotiabank.rnnetwork:contracts` (Android):
+
+- **iOS** — bundlea `ios/iOSNetworkContract.xcframework` (vendored). Se sincroniza desde el repo del contrato con `build-and-sync.sh`.
+- **Android** — dependencia Maven en `android/build.gradle`.
+
+La **app nativa del banco** implementa `NetworkProvider` y lo registra en `RNNetworkRegistry` antes de iniciar RN. Ver el repo del contrato y los docs.
+
+## Desarrollo local
+
+```bash
+npm run build       # compila TS (build/)
+npm test            # jest
+npm run lint
+```
+
+### Linkeo contra los repos locales
+
+```bash
+# En la app consumidora:
+npm install ../rn-network --install-links=false   # symlink (live)
+# requiere metro.config.js (ver docs · Modo desarrollo)
+
+# Sincronizar el xcframework del contrato cuando cambia:
+cd ../rn-network-contracts && ./scripts/build-and-sync.sh
+```
+
+> Con symlink, agregá `metro.config.js` con `watchFolders` + `blockList` (ver docs). O usá `npm install ../rn-network` (copia) sin config.
+
+## Estructura
+
+```
+src/        TS: index, RNNetworkBridge, MockNetworkProvider, AppConfigContext, types
+ios/        RnNetworkModule.swift, NetworkErrorMapper.swift, RnNetwork.podspec, iOSNetworkContract.xcframework
+android/    RnNetworkModule.kt, NetworkErrorMapper.kt, build.gradle
+example/    app mínima de referencia (cómo integrar)
+docs/       documentación completa (Confluence)
+```
+
+## Documentación completa
+
+Ver [`docs/`](docs/README.md) — arquitectura, decisiones técnicas, integración nativa, referencia API, troubleshooting.
+
+## API pública
+
+`request` · `cancelRequest` · `setRequestTimeout` · `setProvider` · `isAvailable` · `setBaseURL` · `getBaseURL` · `onSessionExpired` · `AppConfigProvider` · `useAppConfig` · `MockNetworkProvider` · `parseAppConfig`
+
+Tipos: `NetworkResponse` · `NetworkErrorPayload` · `NetworkErrorCode` · `HttpMethod` · `RequestOptions` · `AppConfig`
