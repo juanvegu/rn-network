@@ -4,9 +4,9 @@ Catálogo de problemas comunes con diagnóstico.
 
 ## `isAvailable() === false` aunque el host registró el provider
 
-### Causa A — iOS: `NetworkContracts` se linkeó estático
+### Causa A — iOS: dos copias del contrato (versiones distintas)
 
-Síntoma: el módulo Expo y el host tienen dos copias del singleton.
+Síntoma: el módulo Expo y el host tienen dos `RNNetworkRegistry`, o crash con `Symbol not found: ...request...` en runtime.
 
 Diagnóstico:
 
@@ -16,11 +16,21 @@ print("registry:", ObjectIdentifier(RNNetworkRegistry.self))
 
 Si el `ObjectIdentifier` desde el host y desde el módulo Expo difieren, hay duplicación.
 
+Causa raíz típica: **la app nativa usa una versión del `iOSNetworkContract.xcframework` y el módulo Expo bundlea otra.** Las firmas no coinciden.
+
 Solución:
 
-1. Verificar que el plugin Expo está en `app.json`: `"plugins": ["@scotia/rn-network"]`.
-2. Correr `npx expo prebuild --clean`.
-3. Verificar en el Podfile generado que el `post_install` setea `MACH_O_TYPE = mh_dylib` para `NetworkContracts`.
+1. Confirmar que ambos usan la **misma versión** del xcframework.
+2. En dev local: `cd rn-network-contracts && ./scripts/build-and-sync.sh` para regenerar y sincronizar.
+3. Re-instalar el módulo en la app (`npm install ../rn-network …`) y rebuild de ScotiaBrownfield.
+
+### Causa A.2 — iOS: `Undefined symbols ... NetworkError.httpStatus` al LINKEAR
+
+Síntoma: compila pero falla el link del app target.
+
+Causa: pod estático (`RnNetwork`) que vendoriza framework dynamic — CocoaPods no propaga el `-framework` al app target.
+
+Solución: el `user_target_xcconfig` del podspec lo resuelve (ver [03 · Distribución del contrato](../02-integracion-app-rn/03-config-plugin.md)). Reinstalar pods.
 
 ### Causa B — Android: distinto `ClassLoader`
 
@@ -135,3 +145,19 @@ pod outdated
 ```
 
 Solución: actualizar `rn-network` para que pinee a la misma versión que el host.
+
+## Metro: `Unable to resolve module @scotia/rn-network` (dev local con symlink)
+
+Síntoma: el build nativo pasa pero Metro no encuentra el módulo.
+
+Causa: el módulo está linkeado por symlink a una carpeta **fuera del project root**, y Metro no la observa.
+
+Solución: agregar `metro.config.js` con `watchFolders` + `blockList` (ver [Modo desarrollo](../02-integracion-app-rn/05-modo-desarrollo.md)). O usar `file:` (copia) en vez de symlink.
+
+## Metro: `Unable to resolve @react-native/virtualized-lists`
+
+Síntoma: aparece tras agregar el `metro.config.js`.
+
+Causa: `disableHierarchicalLookup: true` rompe la resolución interna de react-native.
+
+Solución: NO usar `disableHierarchicalLookup`. Usar `blockList` sobre `rn-network/node_modules` + `nodeModulesPaths` apuntando al node_modules de la app (deja el lookup jerárquico ON).

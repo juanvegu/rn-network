@@ -1,5 +1,5 @@
 import ExpoModulesCore
-import NetworkContracts
+import iOSNetworkContract
 
 public class RNNetworkModule: Module {
     public func definition() -> ModuleDefinition {

@@ -1,6 +1,6 @@
 import Foundation
 import ExpoModulesCore
-import NetworkContracts
+import iOSNetworkContract
 
 final class NetworkException: Exception {
     private let networkCode: String

@@ -26,27 +26,33 @@ Los repos `rn-network-contracts-ios` y `rn-network-contracts-android` van **siem
 
 ## Sincronización contrato ↔ módulo Expo
 
-`@scotia/rn-network` declara dependencias **pineadas** a versiones exactas:
+El contrato y el módulo Expo van a la **misma versión**, pero el mecanismo difiere por plataforma:
+
+**iOS** — el módulo **bundlea** el xcframework del contrato (no es una dependencia de podspec). La versión bundleada debe coincidir con la que usa la app nativa por SPM:
 
 ```ruby
-# rn-network/ios/RnNetwork.podspec
-s.dependency 'NetworkContracts', '1.1.0'
+# rn-network/ios/RnNetwork.podspec — vendoriza el binario
+s.vendored_frameworks = 'iOSNetworkContract.xcframework'
 ```
+
+Si la app nativa usa `iOSNetworkContract 1.1.0` por SPM y el módulo bundlea `1.0.0`, las firmas difieren → `Symbol not found` en runtime. Por eso se sincronizan (ver [decisión 12](04-decisiones-tecnicas.md)).
+
+**Android** — dependencia Maven pineada a versión exacta:
 
 ```groovy
 // rn-network/android/build.gradle
 implementation 'cl.scotiabank.rnnetwork:contracts:1.1.0'
 ```
 
-Así garantizamos que la versión del módulo Expo se prueba contra la misma versión del contrato que se publica. Cuando bumpeás el contrato, también bumpeás el módulo Expo con un PR que actualice estas líneas.
+Cuando bumpeás el contrato, bumpeás el módulo Expo: en iOS re-bundleás el xcframework nuevo; en Android actualizás la línea de la dependencia.
 
 ## Versiones actuales (referencia)
 
-| Componente | Versión | Repo |
-|---|---|---|
-| `NetworkContracts` (iOS) | 1.1.0 | `rn-network-contracts-ios` |
-| `cl.scotiabank.rnnetwork:contracts` (Android) | 1.1.0 | `rn-network-contracts-android` |
-| `@scotia/rn-network` | 1.1.x | `rn-network` |
+| Componente | Versión | Repo | Distribución |
+|---|---|---|---|
+| `iOSNetworkContract` (iOS) | 1.1.0 | `rn-network-contracts-ios` | xcframework binario (git tag) |
+| `cl.scotiabank.rnnetwork:contracts` (Android) | 1.1.0 | `rn-network-contracts-android` | AAR (Maven) |
+| `@scotia/rn-network` | 1.1.x | `rn-network` | npm interno |
 
 ## Migración 1.0 → 1.1 (host del banco)
 

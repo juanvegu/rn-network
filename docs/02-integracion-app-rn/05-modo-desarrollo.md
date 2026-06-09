@@ -69,3 +69,49 @@ En producción contra el host real:
 - Aunque el código del mock viaja en el bundle, nunca se invoca.
 
 Si querés ser defensivo y excluirlo del bundle prod, podés envolver el `require('./mocks/...')` en un check `process.env.NODE_ENV !== 'production'` y dejar que Metro tree-shakee. No es obligatorio.
+
+## Dev local con el contrato + módulo linkeados (iOS)
+
+Cuando trabajás contra los repos locales (`rn-network-contracts` + `rn-network`) en vez de las versiones publicadas, hay dos piezas extra:
+
+### 1. Sincronizar el xcframework del contrato
+
+El módulo Expo bundlea `ios/iOSNetworkContract.xcframework`. Cuando cambiás el contrato, regeneralo y sincronizalo con un comando:
+
+```bash
+cd rn-network-contracts
+./scripts/build-and-sync.sh   # build del xcframework + copia a ../rn-network/ios/
+```
+
+### 2. `metro.config.js` para el módulo linkeado por symlink
+
+Si instalaste el módulo por symlink (`npm install ../rn-network --install-links=false`), el módulo vive **fuera del project root** y tiene su propio `node_modules`. Metro necesita config:
+
+```javascript
+// metro.config.js
+const { getDefaultConfig } = require('expo/metro-config')
+const path = require('path')
+
+const projectRoot = __dirname
+const rnNetworkRoot = path.resolve(projectRoot, '../rn-network')
+
+const config = getDefaultConfig(projectRoot)
+config.watchFolders = [rnNetworkRoot]                              // seguir el symlink
+const escaped = rnNetworkRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+config.resolver.blockList = [new RegExp(`^${escaped}/node_modules/.*`)]  // sin react duplicado
+config.resolver.nodeModulesPaths = [path.resolve(projectRoot, 'node_modules')]
+
+module.exports = config
+```
+
+> Este `metro.config.js` es **solo para dev local con symlink**. Con el paquete publicado (copiado en `node_modules` dentro del project root), Metro lo resuelve sin config — se puede eliminar.
+
+### Alternativa: copia en vez de symlink
+
+Si Metro te complica con el symlink, usá `file:` (copia) y no necesitás `metro.config.js`:
+
+```bash
+npm install ../rn-network    # sin --install-links=false → copia
+```
+
+El costo: re-instalar tras cada cambio del módulo. Pero replica exactamente el comportamiento del paquete publicado.

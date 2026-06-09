@@ -1,53 +1,65 @@
-# Config plugin
+# Distribución del contrato en el módulo Expo (vendored xcframework)
 
-`@scotia/rn-network` incluye un config plugin de Expo que se ejecuta durante `npx expo prebuild`. **Solo afecta a iOS.**
+> **Nota histórica:** versiones anteriores usaban un **config plugin** de Expo que inyectaba un `post_install` en el Podfile para forzar `NetworkContracts` a dynamic framework. **Ese plugin se eliminó.** Con el xcframework binario ya no hace falta forzar nada — el binario ya es dynamic. Lo reemplaza el `vendored_frameworks` + `user_target_xcconfig` que se describe acá.
 
-## Qué hace
+## Cómo el módulo Expo obtiene el contrato
 
-Agrega un `post_install` hook al Podfile que fuerza a `NetworkContracts` a compilarse como **dynamic framework** (`MACH_O_TYPE = mh_dylib`), aunque CocoaPods quisiera linkearlo estático.
+`@scotia/rn-network` **bundlea** el `iOSNetworkContract.xcframework` dentro del paquete (`ios/iOSNetworkContract.xcframework`). El podspec lo declara como `vendored_frameworks`:
 
-## Por qué es necesario
+```ruby
+# ios/RnNetwork.podspec
+s.vendored_frameworks = 'iOSNetworkContract.xcframework'
+s.exclude_files       = 'iOSNetworkContract.xcframework/**/*'
+```
 
-Si `NetworkContracts` se linkea estático, el binary final de la app tiene **dos copias** del símbolo `RNNetworkRegistry` (una en el módulo Expo, otra en la app del banco). Cada copia mantiene su propio singleton → el host registra el provider en una instancia y el módulo Expo lee la otra → `isAvailable() === false` aunque registraste.
+- En **dev local**: el xcframework se sincroniza con `rn-network-contracts/scripts/build-and-sync.sh`.
+- En **producción**: el pipeline del módulo Expo baja el xcframework publicado de Artifactory y lo bundlea en el paquete npm.
 
-Como dynamic framework, los símbolos viven en una única `.framework` cargada en runtime y el singleton es realmente compartido.
+## El `user_target_xcconfig` (crítico)
 
-## Cómo se aplica
+Con static linking (el default de Expo, `use_frameworks!` off), un pod estático (`RnNetwork`) que vendoriza un framework dynamic (`iOSNetworkContract`) tiene un problema conocido de CocoaPods:
 
-En `app.json`:
+- CocoaPods agrega el `FRAMEWORK_SEARCH_PATHS` del xcframework → **compila** bien (encuentra el `.swiftinterface`)
+- Pero **no propaga** el `-framework iOSNetworkContract` al app target → **no linkea** (`Undefined symbols`)
 
-```json
-{
-  "expo": {
-    "plugins": ["@scotia/rn-network"]
-  }
+Se fuerza con `user_target_xcconfig` (aplica al app target, no al pod):
+
+```ruby
+s.user_target_xcconfig = {
+  'OTHER_LDFLAGS' => '-framework "iOSNetworkContract"',
+  'FRAMEWORK_SEARCH_PATHS' => '"${PODS_XCFRAMEWORKS_BUILD_DIR}/RnNetwork"',
 }
 ```
 
-Después correr `npx expo prebuild --clean`. El plugin modifica `ios/Podfile`.
+Esto viaja en el podspec, así que cualquier app que instale el módulo lo recibe — **sin** config plugin, sin tocar la app.
 
 ## Validación
 
-En el Podfile generado deberías ver un bloque tipo:
+Después de `pod install`, el app target debe tener el flag de link:
 
-```ruby
-post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    if target.name == 'NetworkContracts'
-      target.build_configurations.each do |config|
-        config.build_settings['MACH_O_TYPE'] = 'mh_dylib'
-        # … etc
-      end
-    end
-  end
-end
+```bash
+grep "iOSNetworkContract" "ios/Pods/Target Support Files/Pods-<app>/Pods-<app>.debug.xcconfig"
+# Debe aparecer: -framework "iOSNetworkContract"
 ```
 
-Si lo borrás y volvés a `pod install`, el plugin lo regenera en el próximo `prebuild`.
+Y el framework debe embeberse en runtime:
+
+```bash
+grep "iOSNetworkContract" "ios/Pods/Target Support Files/Pods-<app>/Pods-<app>-frameworks.sh"
+# Debe aparecer: install_framework ...iOSNetworkContract.framework
+```
 
 ## Troubleshooting
 
-| Síntoma | Causa |
-|---|---|
-| `isAvailable()` siempre false aunque registraste | NetworkContracts se linkeó estático. Verificar plugin en `app.json` y correr `prebuild --clean`. |
-| `duplicate symbols for ...RNNetworkRegistry...` al compilar iOS | Mismo problema, otra cara. Misma solución. |
+| Síntoma | Causa | Solución |
+|---|---|---|
+| `Undefined symbols ... iOSNetworkContract.NetworkError.httpStatus` al linkear | Falta `-framework` en el app target (pod estático + framework dynamic) | El `user_target_xcconfig` lo arregla; reinstalar pods |
+| `Symbol not found: ...request...` en **runtime** | Versión del xcframework del módulo ≠ versión que usa la app nativa | Alinear versiones (rebuild del módulo + sync) |
+| `cannot find type ... in scope` al compilar el módulo | El xcframework no tiene `Modules/swiftinterface` | Regenerar con `build-xcframework.sh` (maneja el gotcha de SwiftPM) |
+
+## Sin config plugin
+
+Como ya no hay config plugin:
+- **No** hay entrada `"@scotia/rn-network"` en `plugins` del `app.json`
+- **No** se inyecta nada al Podfile vía prebuild
+- El módulo se autolinkea normal (vía `expo-module.config.json`) y trae el xcframework por vendored

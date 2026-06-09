@@ -1,6 +1,6 @@
 # Contracts iOS (Swift)
 
-Referencia de los protocolos y singleton en `rn-network-contracts-ios`.
+Referencia de los protocolos y singleton del módulo **`iOSNetworkContract`** (repo `rn-network-contracts-ios`). Importás con `import iOSNetworkContract`.
 
 ## `NetworkProvider`
 

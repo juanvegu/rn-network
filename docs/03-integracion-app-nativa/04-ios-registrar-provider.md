@@ -3,7 +3,7 @@
 ## Implementación de referencia (URLSession)
 
 ```swift
-import NetworkContracts
+import iOSNetworkContract
 import Foundation
 
 final class AppNetworkProvider: NetworkProvider {
@@ -65,7 +65,7 @@ final class AppNetworkProvider: NetworkProvider {
 En `AppDelegate.application(_:didFinishLaunchingWithOptions:)`, **antes** de inicializar el host de RN:
 
 ```swift
-import NetworkContracts
+import iOSNetworkContract
 
 // 1. AppConfig estático
 RNNetworkRegistry.appConfig = AppConfig(

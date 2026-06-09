@@ -6,11 +6,11 @@ Mapa de archivos y responsabilidades.
 
 | Archivo | Tipo | Rol |
 |---|---|---|
-| `Sources/NetworkContracts/AppConfig.swift` | `struct AppConfig`, `struct DomainConfig` | Inmutables; describen país, environment y dominios disponibles |
-| `Sources/NetworkContracts/NetworkProvider.swift` | `protocol NetworkProvider` | El contrato que implementa el host. Método `request(requestId:url:method:headers:body:)` y `cancel(requestId:)` opcional |
-| `Sources/NetworkContracts/NetworkResponse.swift` | `struct NetworkResponse` | Envelope de éxito: `statusCode`, `headers`, `data?` |
-| `Sources/NetworkContracts/NetworkError.swift` | `struct NetworkError: Error` | Error tipado del host: `code`, `retryable`, `httpStatus?`, `message?`, `info?` |
-| `Sources/NetworkContracts/RNNetworkRegistry.swift` | `final class RNNetworkRegistry` | Singleton compartido. Campos `provider`, `appConfig`, `activeDomain`, `onSessionExpired` |
+| `Sources/iOSNetworkContract/AppConfig.swift` | `struct AppConfig`, `struct DomainConfig` | Inmutables; describen país, environment y dominios disponibles |
+| `Sources/iOSNetworkContract/NetworkProvider.swift` | `protocol NetworkProvider` | El contrato que implementa el host. Método `request(requestId:url:method:headers:body:)` y `cancel(requestId:)` opcional |
+| `Sources/iOSNetworkContract/NetworkResponse.swift` | `struct NetworkResponse` | Envelope de éxito: `statusCode`, `headers`, `data?` |
+| `Sources/iOSNetworkContract/NetworkError.swift` | `struct NetworkError: Error` | Error tipado del host: `code`, `retryable`, `httpStatus?`, `message?`, `info?` |
+| `Sources/iOSNetworkContract/RNNetworkRegistry.swift` | `final class RNNetworkRegistry` | Singleton compartido. Campos `provider`, `appConfig`, `activeDomain`, `onSessionExpired` |
 
 ## `rn-network-contracts` (Android — Kotlin)
 
@@ -42,4 +42,3 @@ Mapa de archivos y responsabilidades.
 | `ios/NetworkErrorMapper.swift` | Convierte `URLError`, `CancellationError`, `NetworkError` → `NetworkException` (con payload JSON en `code`). |
 | `android/.../RnNetworkModule.kt` | Equivalente Android del Expo Module. |
 | `android/.../NetworkErrorMapper.kt` | Mapea `IOException`, `SSLException`, `CancellationException`, `NetworkError` → `NetworkException`. |
-| `plugin/withNetworkContracts.ts` | Config plugin Expo (Podfile hooks para iOS). |
